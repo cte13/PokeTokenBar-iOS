@@ -200,22 +200,25 @@ struct PokeTokenBarWidgetEntryView: View {
             }
         } else {
             // Five two-column rows is the most the medium height holds; anything beyond is summarised.
+            // Column-major so provider groups stay together (Claude ×3 | Go ×3) instead of
+            // interleaving row by row.
             let visible = Array(rows.prefix(Self.maxDenseRows))
-            let pairs = stride(from: 0, to: visible.count, by: 2).map { Array(visible[$0..<min($0 + 2, visible.count)]) }
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(Array(pair.enumerated()), id: \.offset) { _, row in
+            let half = (visible.count + 1) / 2
+            let columns = [Array(visible[0..<half]), Array(visible[half...])]
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(column.enumerated()), id: \.offset) { _, row in
                             limitBar(row, showsReset: false, dense: true)
                         }
-                        if pair.count == 1 { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
                     }
+                    .frame(maxWidth: .infinity)
                 }
-                if rows.count > visible.count {
-                    Text("+\(rows.count - visible.count) more in app")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                }
+            }
+            if rows.count > visible.count {
+                Text("+\(rows.count - visible.count) more in app")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
             }
         }
     }

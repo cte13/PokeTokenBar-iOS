@@ -65,7 +65,11 @@ public struct AntigravityRateLimitsProvider: AntigravityLimitsProviding, Sendabl
             AppLog.write("antigravity probe loadCodeAssist \(http.statusCode): \(reason)")
             return
         }
-        AppLog.write("antigravity probe loadCodeAssist 200 shape=\(JSONKeyShape.describe(data))")
+        // 깊이 3 — 2 에서는 allowedTiers·privacyNotice 내부가 `{…}` 로 가려져 quota 필드 유무를
+        // 판단할 수 없었다(#34 실측).
+        AppLog.write("antigravity probe loadCodeAssist 200 shape=\(JSONKeyShape.describe(data, maxDepth: 3))")
+        // 응답에 quota 필드가 없었으므로, 남은 단서는 티어 설명 문구다(한도가 산문으로 적히는 경우).
+        AppLog.write("antigravity probe tiers: \(AntigravityTierSummary.describe(data))")
     }
 
     private func fetchStatus(accessToken: String) async throws -> AntigravityRateLimitStatus {

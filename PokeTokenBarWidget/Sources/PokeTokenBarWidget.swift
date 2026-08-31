@@ -117,60 +117,67 @@ struct PokeTokenBarWidgetEntryView: View {
             let isShiny = companion.representativeSpeciesID != nil
                 ? (companion.representativeIsShiny ?? false) : companion.isShiny
 
-            HStack(alignment: .center, spacing: 8) {
-                spriteImage(companion: companion, eggFontSize: 30)
-                    .frame(width: 36, height: 36)
+            HStack(alignment: .center, spacing: 6) {
+                spriteImage(companion: companion, eggFontSize: 26)
+                    .frame(width: 32, height: 32)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 3) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text(companion.isEgg ? String(localized: "Egg") : companion.name)
-                            .font(.headline)
+                            .font(.system(size: 13, weight: .bold))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                            .minimumScaleFactor(0.7)
                         if isShiny && !companion.isEgg {
                             Image(systemName: "sparkles")
-                                .font(.system(size: 9))
+                                .font(.system(size: 8))
                         }
                         Spacer(minLength: 2)
                         Text(TokenFormatter.compact(payload.todayTokens))
-                            .font(.subheadline.monospacedDigit().bold())
+                            .font(.system(size: 13, weight: .bold).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
 
                     ProgressView(value: min(1, max(0, progress)))
-                        .scaleEffect(x: 1, y: 0.8, anchor: .center)
+                        .scaleEffect(x: 1, y: 0.7, anchor: .center)
+                        .padding(.vertical, 0.5)
 
                     HStack(spacing: 4) {
                         if companion.isEgg {
                             Text("\(Int(progress * 100))% hatched")
-                                .font(.caption2)
+                                .font(.system(size: 9.5))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         } else if !companion.stageText.isEmpty {
                             Text(companion.stageText)
-                                .font(.caption2)
+                                .font(.system(size: 9.5))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                         Spacer(minLength: 2)
                         if payload.todayCost > 0 {
                             Text(TokenFormatter.costCompact(payload.todayCost))
-                                .font(.caption2.monospacedDigit())
+                                .font(.system(size: 9.5).monospacedDigit())
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         } else {
                             Text("\(Int(progress * 100))%")
-                                .font(.caption2.monospacedDigit())
+                                .font(.system(size: 9.5).monospacedDigit())
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
                 }
             }
         } else {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: "gamecontroller")
                     .font(.title2)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text("PokeTokenBar")
-                        .font(.headline)
+                        .font(.system(size: 13, weight: .bold))
                     Text("Open app to sync")
-                        .font(.caption2)
+                        .font(.system(size: 9.5))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -182,21 +189,21 @@ struct PokeTokenBarWidgetEntryView: View {
         if let payload, let companion = payload.companion {
             let progress = companion.isEgg ? companion.eggProgress : companion.progress
             Gauge(value: min(1, max(0, progress))) {
-                Text(companion.name)
+                Text(TokenFormatter.compact(payload.todayTokens))
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
             } currentValueLabel: {
                 if companion.isEgg {
                     Text("🥚")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                 } else if let id = companion.representativeSpeciesID ?? companion.speciesID,
                           let img = SpriteCache.shared.cachedImage(key: PokeSpriteURL.speciesKey(id: id, shiny: companion.isShiny)) {
                     Image(uiImage: img)
                         .resizable()
                         .interpolation(.none)
-                        .frame(width: 20, height: 20)
+                        .frame(width: 22, height: 22)
                 } else {
-                    Text(TokenFormatter.compact(payload.todayTokens))
-                        .font(.system(size: 9, weight: .bold).monospacedDigit())
-                        .minimumScaleFactor(0.7)
+                    Text(companion.isEgg ? "🥚" : "👾")
+                        .font(.system(size: 14))
                 }
             }
             .gaugeStyle(.accessoryCircular)

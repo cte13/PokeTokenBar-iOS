@@ -241,10 +241,33 @@ final class ShopTests: XCTestCase {
         XCTAssertEqual(entries.last?.isPassive, true)
     }
 
-    /// 알 상태(활성 포켓몬 없음)에선 폰 목록에서도 알이 전부 빠진다 — shopEntries 게이트의 폰 미러.
-    func testPhoneShopEntriesOmitEggsWhenNoActive() {
-        let entries = AppDelegate.phoneShopEntries(store(used: 5_000_000_000))
-        XCTAssertFalse(entries.contains(where: \.isEgg))
-        XCTAssertEqual(entries.map(\.id), ["item:mint", "item:rareCandy", "item:shinyCharm"])
+    /// 알 상태(활성 포켓몬 없음)에서도 폰 목록에 알 3종이 남는다 — Mac 의 새 규약(#261) 미러.
+    /// 잔액이 충분해도 못 사는 상태라, 폰은 `canAfford`(지갑)와 `lockedReason`(상태)을 분리해 받는다.
+    func testPhoneShopEntriesKeepEggsLockedWhenNoActive() {
+        let companion = store(used: 5_000_000_000)
+        let entries = AppDelegate.phoneShopEntries(companion)
+        XCTAssertEqual(entries.map(\.id),
+                       ["item:mint", "item:rareCandy", "egg:plain",
+                        "egg:uncommon", "item:shinyCharm", "egg:rare"],
+                       "알 상태에서도 목록·정렬은 활성일 때와 같다")
+        let eggs = entries.filter(\.isEgg)
+        XCTAssertEqual(eggs.count, 3)
+        for egg in eggs {
+            XCTAssertTrue(egg.canAfford, "\(egg.id): 지갑은 가격을 덮는다 — 막는 건 상태뿐")
+            XCTAssertEqual(egg.lockedReason, companion.l.eggShopLockedHint,
+                           "\(egg.id): 못 사는 사유를 현지화해 보낸다")
+        }
+        XCTAssertTrue(entries.filter { !$0.isEgg }.allSatisfy { $0.lockedReason == nil },
+                      "아이템은 상태 게이트가 없다 — 잔액만으로 판단")
+    }
+
+    /// 활성 포켓몬이 있으면 알에 상태 게이트가 없고, 잔액 부족은 canAfford 로만 표현된다.
+    func testPhoneShopEggsUnlockedWithActiveAndPriceGatedByWallet() {
+        let entries = AppDelegate.phoneShopEntries(storeWithMon(used: FreshEgg.price))
+        let eggs = Dictionary(uniqueKeysWithValues: entries.filter(\.isEgg).map { ($0.id, $0) })
+        XCTAssertEqual(eggs.count, 3)
+        XCTAssertTrue(eggs.values.allSatisfy { $0.lockedReason == nil })
+        XCTAssertTrue(eggs["egg:plain"]!.canAfford, "잔액 = 기본 알 가격 정확히 → 구매 가능")
+        XCTAssertFalse(eggs["egg:rare"]!.canAfford, "더 비싼 등급 알은 잔액 부족")
     }
 }

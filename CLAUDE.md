@@ -28,6 +28,10 @@
   remote 가 origin(포크)·upstream 두 개라 `gh` 가 기본 대상을 upstream 으로 잡는다 (실제로
   upstream 에 잘못 열린 적이 있다). 그래서 **`--repo cte13/PokeTokenBar-iOS` 를 항상 명시**한다:
   `gh pr create --repo cte13/PokeTokenBar-iOS --base main …`
+- **Upstream 동기화는 항상 머지 커밋(Merge Commit)으로 결합한다 (스쿼시 머지 금지).**
+  업스트림 동기화 PR 을 스쿼시 머지하면 Git 그래프 상의 조상 관계(ancestry)가 끊어져 GitHub UI 에
+  수십 개의 'phantom commits behind' 가 계속 남는다. 동기화는 `git merge upstream/main` 또는
+  GitHub 에서 "Create a merge commit" 옵션으로 머지하여 조상 노드를 유지한다.
 
 ## 기여 언어 규약 (오픈소스 대비 — English first)
 

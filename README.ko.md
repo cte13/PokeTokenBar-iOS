@@ -25,6 +25,50 @@ PokeTokenBar는 당신이 이미 태우고 있는 AI 코딩 토큰(Claude Code �
 
 > 토큰 사용량은 로컬 Claude Code·Codex·Gemini CLI·Antigravity·OpenCode·Hermes Agent·Cursor·Grok CLI·Copilot CLI·Kiro CLI·Pi Agent·omp 데이터에서 직접 읽습니다(`totalTokens` = input + output + cache, 로컬 날짜) — 외부 CLI 불필요. 비공식·비상업 포켓몬 팬 프로젝트 — [라이선스 & 면책](#라이선스--면책) 참고.
 
+## [chattymin/PokeTokenBar](https://github.com/chattymin/PokeTokenBar) 포크 안내
+
+이 저장소는 [chattymin](https://github.com/chattymin)의 [PokeTokenBar](https://github.com/chattymin/PokeTokenBar)를 기반으로 한 포크입니다. 오리지널 macOS 메뉴바 앱, 포켓몬 companion 시스템, 그리고 사용량 추적 설계의 모든 크레딧은 원작자에게 있습니다.
+
+이 포크는 iCloud CloudKit 동기화, 잠금화면 & 홈화면 위젯, 대시보드 기능을 갖춘 **iOS 컴패니언 앱**과 **WidgetKit 확장**을 추가합니다.
+
+## 📱 iOS 컴패니언 & 위젯
+
+어디서든 포켓몬 companion과 사용량 지표를 확인하세요. Mac의 PokeTokenBar 상태를 실시간으로 미러링하는 비공식 **iPhone 컴패니언 앱**과 **WidgetKit 확장**이 포함되어 있습니다.
+
+<table>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-home.png" width="280" alt="iOS 컴패니언 앱 — 홈"><br>
+  <em>Companion 상태, 오늘/주간/월간 사용량, burn rate, 진화 트리</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-limits.png" width="280" alt="iOS 컴패니언 앱 — 한도 및 이력"><br>
+  <em>공식 한도 카운트다운 & 한도 소진 이력 차트</em>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-widget.png" width="340" alt="홈 화면 위젯"><br>
+  <em>실시간 한도 게이지가 포함된 중간 크기 홈 화면 위젯</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-lockscreen.png" width="280" alt="잠금 화면 액세서리 위젯"><br>
+  <em>Companion, 경험치 바, 토큰을 한눈에 보는 잠금 화면 위젯</em>
+</td>
+</tr>
+</table>
+
+### 주요 기능
+- **완전한 대시보드 & 탭 지원**: 활성 포켓몬(애니메이션 스프라이트, 성격, 이로치 여부, 진화 라인)과 읽기 전용 **가방**, **도감**, **상점** 탭.
+- **실시간 한도 및 이력**: Claude, Codex, Antigravity 등의 공식 5시간/주간 한도 카운트다운 및 Mac에서 기록된 한도 이력 그래프.
+- **홈 & 잠금 화면 위젯**:
+  - **홈 화면(중간 크기)**: 실시간 토큰 사용량, 비용, companion 아이콘, 프로바이더별 한도 게이지.
+  - **잠금 화면**: 원형 companion 스프라이트, 직사각형 진화/경험치 바, 인라인 토큰 요약.
+- **iCloud CloudKit & 로컬 동기화**:
+  - **iCloud(기본)**: 갱신 시마다 개인 iCloud 저장소로 암호화된 스냅샷을 푸시 — 별도 설정 없이 셀룰러나 다른 Wi-Fi에서도 완벽 작동.
+  - **로컬 네트워크 폴백**: 같은 Wi-Fi 환경에서는 페어링 코드로 보안된 로컬 HTTP/Bonjour 엔드포인트 지원.
+- **0ms 즉시 실행 & 오프라인 모드**: 로컬 캐시를 활용해 오프라인 상태에서도 지연 없이 즉시 앱 실행.
+
 ## 왜
 
 - **열어보는 게 즐거운 사용량 트래커.** 사용량이 포켓몬을 키웁니다 — 부화하고, 진화하고, 졸업해 도감을 채우죠. 이로치 한 마리가 다시 열어볼 이유가 됩니다.

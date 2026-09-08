@@ -948,6 +948,13 @@ read_when:
   `xcrun assetutil --info <...>/Assets.car` → `AssetType == "Icon Image"` 가 3건
   (RGB/opaque=true, RGB/opaque=false, Monochrome/opaque=false).
 
+- **macOS 타깃의 `GENERATE_INFOPLIST_FILE: YES` 는 `LSUIElement` 와 `CFBundleIconFile` 을 누락하고, 리소스 부재로 Dock 에 빈 와이어프레임 아이콘이 뜬다.**
+  macOS 앱(`PokeTokenBar`)은 메뉴바 전용(`LSUIElement = true`)으로 설계되었으나, `project.yml` 에서 `GENERATE_INFOPLIST_FILE: YES` 로 두고 리소스/자산 카탈로그를 `sources:` 에 선언하지 않았다.
+  그 결과: (1) `LSUIElement` 가 없어 Xcode 빌드/실행 시 Dock 에 일반 전면 앱으로 노출되고, (2) `AppIcon.icns` 와 `Assets.xcassets` 가 번들 `Contents/Resources` 에 포함되지 않아 macOS 기본 격자 와이어프레임 플레이스홀더 아이콘이 노출되었으며, (3) 런타임의 `Bundle.main.url(forResource: "AppIcon", withExtension: "icns")` 가 `nil` 을 반환했다.
+  해결: `Sources/PokeTokenBar/Resources/Info.plist` 를 명시(`LSUIElement: true`, `CFBundleIconFile: AppIcon`)하고 `GENERATE_INFOPLIST_FILE: false`, `Assets.xcassets`(folder.assetCatalog) 및 `AppIcon.icns` 를 `sources:` 에 추가. SPM 패키지 충돌 방지를 위해 `Package.swift` 의 target exclude 에 `PokeTokenBar.entitlements`, `Resources` 추가.
+  검증: `xcodebuild` 산출물의 `Contents/Info.plist` 내 `LSUIElement`/`CFBundleIconFile` 확인, `Contents/Resources/AppIcon.icns` 존재 확인, `swift build` 무경고 및 `swift test` 전수 통과.
+
+
 ## 테스트
 
 - **시간대 의존 단언 — UTC 시각의 local-day 를 기대하면 UTC 보다 느린 시간대에서 실패한다.**

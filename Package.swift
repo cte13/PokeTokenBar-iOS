@@ -12,6 +12,7 @@ let package = Package(
             name: "PokeTokenBar",
             dependencies: ["PokeTokenBarShared"],
             path: "Sources/PokeTokenBar",
+            exclude: ["PokeTokenBar.entitlements", "Resources"],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .testTarget(

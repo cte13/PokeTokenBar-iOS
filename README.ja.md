@@ -38,7 +38,7 @@ PokeTokenBar は、あなたがすでに使っている AI コーディングト
 <table>
 <tr>
 <td width="50%" align="center">
-  <img src="assets/screenshot-ios-home.png" width="280" alt="iOS コンパニオンアプリ — ホーム"><br>
+  <img src="assets/screenshot-ios-home.gif" width="280" alt="iOS コンパニオンアプリ — ホーム"><br>
   <em>パートナーの状態、今日/週間/月間の使用量、burn rate、進化ツリー</em>
 </td>
 <td width="50%" align="center">

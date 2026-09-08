@@ -37,7 +37,7 @@ Take your companion and token metrics wherever you go. This fork includes an uno
 <table>
 <tr>
 <td width="50%" align="center">
-  <img src="assets/screenshot-ios-home.png" width="280" alt="iOS Companion App — Home"><br>
+  <img src="assets/screenshot-ios-home.gif" width="280" alt="iOS Companion App — Home"><br>
   <em>Companion status, today/week/month spend, burn rate, and evolution path</em>
 </td>
 <td width="50%" align="center">

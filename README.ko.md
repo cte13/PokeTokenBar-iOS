@@ -38,7 +38,7 @@ PokeTokenBar는 당신이 이미 태우고 있는 AI 코딩 토큰(Claude Code �
 <table>
 <tr>
 <td width="50%" align="center">
-  <img src="assets/screenshot-ios-home.png" width="280" alt="iOS 컴패니언 앱 — 홈"><br>
+  <img src="assets/screenshot-ios-home.gif" width="280" alt="iOS 컴패니언 앱 — 홈"><br>
   <em>Companion 상태, 오늘/주간/월간 사용량, burn rate, 진화 트리</em>
 </td>
 <td width="50%" align="center">

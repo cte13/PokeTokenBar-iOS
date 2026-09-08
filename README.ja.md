@@ -25,6 +25,50 @@ PokeTokenBar は、あなたがすでに使っている AI コーディングト
 
 > トークン使用量はローカルの Claude Code・Codex・Gemini CLI・Antigravity・OpenCode・Hermes Agent・Cursor・Grok CLI・Copilot CLI・Kiro CLI・Pi Agent・omp データから直接読み取ります（`totalTokens` = input + output + cache、ローカル日付）— 外部 CLI 不要。非公式・非商用のポケモンファンプロジェクトです — [ライセンス & 免責](#ライセンス--免責) を参照。
 
+## [chattymin/PokeTokenBar](https://github.com/chattymin/PokeTokenBar) フォークについて
+
+このリポジトリは [chattymin](https://github.com/chattymin) による [PokeTokenBar](https://github.com/chattymin/PokeTokenBar) のフォークです。オリジナルの macOS メニューバーアプリ、ポケモン companion システム、および使用量トラッキング設計のすべてのクレジットは原作者に帰属します。
+
+このフォークには、iCloud CloudKit 同期、ロック画面 & ホーム画面ウィジェット、フルダッシュボード機能を備えた **iOS コンパニオンアプリ** と **WidgetKit 拡張** が追加されています。
+
+## 📱 iOS コンパニオン & ウィジェット
+
+いつでもどこでもパートナーとトークン使用量を確認できます。Mac の PokeTokenBar のステータスをリアルタイムでミラーリングする非公式の **iPhone コンパニオンアプリ** と **WidgetKit 拡張** が含まれています。
+
+<table>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-home.gif" width="280" alt="iOS コンパニオンアプリ — ホーム"><br>
+  <em>パートナーの状態、今日/週間/月間の使用量、burn rate、進化ツリー</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-limits.png" width="280" alt="iOS コンパニオンアプリ — レート制限と履歴"><br>
+  <em>公式上限カウントダウン & 上限使用率履歴チャート</em>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-widget.png" width="340" alt="ホーム画面ウィジェット"><br>
+  <em>リアルタイム上限バー付きの中サイズホーム画面ウィジェット</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-lockscreen.png" width="280" alt="ロック画面アクセサリウィジェット"><br>
+  <em>パートナー、経験値バー、トークンを一目で確認できるロック画面ウィジェット</em>
+</td>
+</tr>
+</table>
+
+### 主な機能
+- **完全なダッシュボード & タブ対応**: アクティブなポケモン（アニメーションスプライト、性格、色違い、進化ライン）の表示に加え、読み取り専用の **バッグ**、**図鑑**、**ショップ** タブを搭載。
+- **リアルタイム上限と履歴**: Claude、Codex、Antigravity などの公式 5時間/週間上限カウントダウンと Mac で記録された上限履歴グラフ。
+- **ホーム & ロック画面ウィジェット**:
+  - **ホーム画面（中サイズ）**: リアルタイムのトークン使用量、コスト、パートナーアイコン、プロバイダーごとの上限ゲージ。
+  - **ロック画面**: 円形パートナースプライト、長方形の進化/経験値バー、インライントークン概要。
+- **iCloud CloudKit & ローカル同期**:
+  - **iCloud（デフォルト）**: 更新ごとにプライベート iCloud に軽量スナップショットをプッシュ — 設定不要でセルラー回線や異なる Wi-Fi 間でもシームレスに同期。
+  - **ローカルネットワークフォールバック**: 同一 Wi-Fi 環境ではペアリングコード保護されたローカル HTTP/Bonjour エンドポイントをサポート。
+- **0ms 高速起動 & オフライン対応**: ローカルキャッシュにより、オフライン時でも遅延なく即座に起動。
+
 ## なぜ
 
 - **開くのが楽しい使用量トラッカー。** 使用量がポケモンを育てます — 孵化し、進化し、卒業して図鑑を埋めます。色違い1匹が、また開く理由になります。

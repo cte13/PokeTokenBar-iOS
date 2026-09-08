@@ -28,7 +28,45 @@ PokeTokenBar turns the AI coding tokens you're already burning — Claude Code, 
 
 This repository is a fork of [PokeTokenBar](https://github.com/chattymin/PokeTokenBar) by [chattymin](https://github.com/chattymin). All credit for the original macOS menu-bar app, the Pokémon companion system, and the underlying usage-tracking design belongs to the original author.
 
-This fork adds an **iOS companion app** and **WidgetKit extension** that connect to the Mac app over the local network. The upstream project may not adopt these additions — see the [original repo](https://github.com/chattymin/PokeTokenBar) for the macOS-only version.
+This fork adds an **iOS companion app** and **WidgetKit extension** with iCloud CloudKit sync, Lock Screen & Home Screen widgets, and full dashboard parity. The upstream project may not adopt these additions — see the [original repo](https://github.com/chattymin/PokeTokenBar) for the macOS-only version.
+
+## 📱 iOS Companion & Widgets
+
+Take your companion and token metrics wherever you go. This fork includes an unofficial **iPhone companion app** and **WidgetKit extension** that seamlessly mirrors your Mac's PokeTokenBar status.
+
+<table>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-home.gif" width="280" alt="iOS Companion App — Home"><br>
+  <em>Companion status, today/week/month spend, burn rate, and evolution path</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-limits.png" width="280" alt="iOS Companion App — Rate Limits & History"><br>
+  <em>Rate limits countdowns & limit utilization history</em>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-widget.png" width="340" alt="Home Screen Widget"><br>
+  <em>Medium Home Screen widget with live rate-limit bars</em>
+</td>
+<td width="50%" align="center">
+  <img src="assets/screenshot-ios-lockscreen.png" width="280" alt="Lock Screen Accessory Widget"><br>
+  <em>Lock Screen accessory widget showing companion, exp bar & tokens</em>
+</td>
+</tr>
+</table>
+
+### Key Features
+- **Full Dashboard & Tab Parity**: View your active Pokémon (animated sprite, nature, shiny status, evolution line) and browse read-only views for your **Bag**, **Collection (Pokédex)**, and **Shop**.
+- **Real-Time Rate Limits & History**: Track official 5-hour and weekly rate limits across Claude, Codex, and Antigravity, complete with reset countdowns and Mac-recorded limit history charts.
+- **Home & Lock Screen Widgets**:
+  - **Home Screen (Medium)**: Live token spend, cost, companion icon, and stacked limit utilization bars.
+  - **Lock Screen**: Circular companion sprite, rectangular evolution/exp progress bar, and inline token summary.
+- **iCloud CloudKit & Local Sync**:
+  - **iCloud (Default)**: Pushes lightweight snapshots to your private iCloud container on every refresh — works across cellular and different Wi-Fi networks with zero configuration.
+  - **Local Network Fallback**: Mac can serve a lightweight local HTTP endpoint with pairing-code security published via Bonjour.
+- **Instant Cold Start & Offline Mode**: Locally caches the latest payload so the app opens instantly with 0ms delay even when offline.
 
 ## Why
 

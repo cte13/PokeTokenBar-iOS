@@ -49,11 +49,22 @@ final class UsageStore {
     private(set) var isRevokingAntigravityCredential = false
     private(set) var antigravityRevokeMessage: String?
     private(set) var lastErrorDescription: String?
-    private(set) var limitTokenRefreshError: String?
+    private var limitTokenRefreshFailure: (any Error)?
+    var limitTokenRefreshError: String? {
+        limitTokenRefreshFailure.map { Self.friendlyLimitError($0, L(localizationLanguage)) }
+    }
+
     /// Antigravity 갱신 실패 문구. 없으면 사용자가 버튼을 눌러도 **아무 일도 안 일어난 것처럼 보인다**
     /// (실사용자 리포트 2026-08-31) — 로그에만 남고 화면에는 흔적이 없었다. Claude 쪽과 같은 계약:
     /// 사용자 동작 경로에서만 세우고, 성공하면 지운다(자동 폴 실패로 문구를 띄우면 상시 노이즈가 된다).
-    private(set) var antigravityLimitRefreshError: String?
+    private var antigravityLimitRefreshFailure: (any Error)?
+    var antigravityLimitRefreshError: String? {
+        antigravityLimitRefreshFailure.map { Self.friendlyLimitError($0, L(localizationLanguage)) }
+    }
+
+    func lastErrorMessage(_ l: L) -> String? {
+        lastErrorDescription.map { l.usageRefreshError + "\n" + $0 }
+    }
 
     // MARK: Bubble Alert State
     /// Transient speech-bubble payload for the floating pet. Cleared after the TTL.
@@ -300,7 +311,7 @@ final class UsageStore {
         guard lastUpdated != nil else { return ["—"] }
         var usage: [String] = []
         if showTokensInMenu { usage.append(TokenFormatter.compact(todayTotalTokens)) }
-        if showCostInMenu, showsCost { usage.append(TokenFormatter.costCompact(todayCostTotal)) }
+        if showCostInMenu, showsCost { usage.append(todayUsageCost.text(L(localizationLanguage), compact: true)) }
         let limit = menuLimitLine   // nil = 한도 미표시/미가용
 
         if limit != nil && usage.count == 2 {
@@ -337,7 +348,7 @@ final class UsageStore {
     }
 
     /// 표시용 한도 % 변환 — remaining 모드면 100−사용률(0 하한: 사용률이 100 을 넘어도 음수 금지).
-    /// 순수 판정을 분리해 테스트한다. 숫자 *표시* 전용 — 색·게이지·알림 판정에는 쓰지 않는다.
+    /// 숫자와 게이지 채움에 함께 사용한다. 경고색·알림 판정은 원래 사용률을 유지한다.
     nonisolated static func displayPercent(_ utilization: Double, mode: LimitDisplayMode) -> Double {
         mode == .remaining ? max(0, 100 - utilization) : utilization
     }
@@ -349,15 +360,28 @@ final class UsageStore {
     /// 단일 줄 표현 — 관찰(observeStore)·접근성·1줄 렌더 폴백용. 세로 렌더는 menuLines 사용.
     var menuTitle: String { menuLines.joined(separator: " · ") }
 
-    /// Snapshots that participate in cost aggregates / cost UI (excludes flat-rate providers).
+    /// Snapshots that participate in cost aggregates / cost UI.
     var costingSnapshots: [ProviderSnapshot] { snapshots.filter(\.reportsCost) }
 
-    /// Whether any connected provider reports real spend — gates menu/header `$0.00` for flat-rate-only setups.
+    /// Whether a connected provider participates in cost reporting, including unavailable amounts.
     var showsCost: Bool { !costingSnapshots.isEmpty }
 
-    var todayCostTotal: Double {
+    var todayUsageCost: UsageCost {
         let todayKey = LocalUsageReader.todayKey()
-        return costingSnapshots.reduce(0) { $0 + ($1.today?.date == todayKey ? ($1.today?.totalCost ?? 0) : 0) }
+        return costingSnapshots.reduce(into: UsageCost()) { total, snapshot in
+            if let day = snapshot.today, day.date == todayKey { total.add(day.usageCost) }
+        }
+    }
+    var todayCostTotal: Double { todayUsageCost.amount }
+    var weekUsageCost: UsageCost {
+        costingSnapshots.reduce(into: UsageCost()) { total, snapshot in
+            if let period = snapshot.weekTotal { total.add(period.usageCost) }
+        }
+    }
+    var monthUsageCost: UsageCost {
+        costingSnapshots.reduce(into: UsageCost()) { total, snapshot in
+            if let period = snapshot.monthTotal { total.add(period.usageCost) }
+        }
     }
 
     /// 프로바이더 탭 선택 해석 — 선호 id 가 연결돼 있으면 그것, 아니면(첫 실행/연결 해제) 첫 번째.
@@ -367,9 +391,43 @@ final class UsageStore {
     }
 
     var weekTotalTokens: Int { snapshots.reduce(0) { $0 + ($1.weekTotal?.totalTokens ?? 0) } }
-    var weekCostTotal: Double { costingSnapshots.reduce(0) { $0 + ($1.weekTotal?.totalCost ?? 0) } }
+    var weekCostTotal: Double { weekUsageCost.amount }
     var monthTotalTokens: Int { snapshots.reduce(0) { $0 + ($1.monthTotal?.totalTokens ?? 0) } }
-    var monthCostTotal: Double { costingSnapshots.reduce(0) { $0 + ($1.monthTotal?.totalCost ?? 0) } }
+    var monthCostTotal: Double { monthUsageCost.amount }
+
+    /// This month's day-by-day totals summed across providers, in date order.
+    ///
+    /// A provider that reports no series is simply absent from the sum — the remaining providers
+    /// still add up, which is how a `nil` degrades. Cost follows `monthCostTotal`: tokens from
+    /// every provider, with source/estimate/unknown coverage preserved for partial totals.
+    ///
+    /// The date axis is the union of the providers' own axes. In practice they agree (all built
+    /// from the same `startOfMonth(now)`), but taking the union rather than one provider's array
+    /// means a provider whose scan straddled midnight cannot truncate everyone else's last day.
+    var monthDailyTotals: [DailyUsage] {
+        var byDay: [String: DailyUsage] = [:]
+        for snapshot in snapshots {
+            guard let series = snapshot.monthDaily else { continue }
+            let countsCost = snapshot.reportsCost
+            for day in series {
+                var merged = byDay[day.date] ?? DailyUsage(
+                    date: day.date, inputTokens: 0, outputTokens: 0,
+                    cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0, costCoverage: .empty)
+                merged.inputTokens += day.inputTokens
+                merged.outputTokens += day.outputTokens
+                merged.cacheCreationTokens += day.cacheCreationTokens
+                merged.cacheReadTokens += day.cacheReadTokens
+                merged.totalTokens += day.totalTokens
+                if countsCost {
+                    merged.totalCost += day.totalCost
+                    merged.costCoverage.merge(day.costCoverage)
+                }
+                byDay[day.date] = merged
+            }
+        }
+        // "yyyy-MM-dd" sorts lexicographically the same way it sorts chronologically.
+        return byDay.values.sorted { $0.date < $1.date }
+    }
 
     /// Claude 의 활성 5h 블록 — 5h forecast·"현재 블록" 행은 Claude 공식 한도와 짝이므로
     /// providerID 로 명시 조회한다 (전 프로바이더가 블록을 갖게 된 후 first-with-block 은 오매칭).
@@ -585,7 +643,7 @@ final class UsageStore {
         LocalAntigravityProvider(), LocalOpenCodeProvider(), LocalHermesProvider(),
         LocalCursorProvider(), LocalGrokProvider(), LocalCopilotProvider(), LocalKiroProvider(),
         LocalPiProvider(),
-        LocalOmpProvider(),
+        LocalOmpProvider(), LocalAsideProvider(),
     ],
          // 세션 키 우선, 없거나 죽었으면 기존 Keychain/파일 OAuth 경로. 두 인자는 같은
          // SessionKeyLimitsProvider 인스턴스를 봐야 한다 — 설정 화면이 고른 조직을 조회 경로가 써야 하므로.
@@ -804,6 +862,7 @@ final class UsageStore {
             var prevBlock: BlockUsage?
             var prevWeek: PeriodUsage?
             var prevMonth: PeriodUsage?
+            var prevMonthDaily: [DailyUsage]?
             if let previous = snapshots.first(where: { $0.providerID == provider.id }) {
                 if previous.today?.date == todayKey { prevToday = previous.today }
                 prevBlock = previous.activeBlock
@@ -811,6 +870,7 @@ final class UsageStore {
                 // 팝오버의 "이번 주/이번 달" 행이 사라졌다 나타나 깜빡인다.
                 prevWeek = previous.weekTotal
                 prevMonth = previous.monthTotal
+                prevMonthDaily = previous.monthDaily
             }
 
             let today: DailyUsage?
@@ -833,6 +893,7 @@ final class UsageStore {
                     activeBlock: prevBlock,
                     weekTotal: prevWeek,
                     monthTotal: prevMonth,
+                    monthDaily: prevMonthDaily,
                     fetchedAt: Date(),
                     reportsCost: provider.reportsCost))
             }
@@ -869,6 +930,7 @@ final class UsageStore {
                             activeBlock: enrichment.activeBlock,
                             weekTotal: enrichment.periodsOK ? enrichment.weekTotal : nil,
                             monthTotal: enrichment.periodsOK ? enrichment.monthTotal : nil,
+                            monthDaily: enrichment.periodsOK ? enrichment.monthDaily : nil,
                             fetchedAt: Date(),
                             reportsCost: provider.reportsCost))
                     }
@@ -878,6 +940,7 @@ final class UsageStore {
                 if enrichment.periodsOK {
                     snapshots[index].weekTotal = enrichment.weekTotal
                     snapshots[index].monthTotal = enrichment.monthTotal
+                    snapshots[index].monthDaily = enrichment.monthDaily
                 }
             }
         }
@@ -988,13 +1051,13 @@ final class UsageStore {
             limitsAvailable = true
             limitsUpdatedAt = Date()
             limitsAuthExpiry = nil
-            limitTokenRefreshError = nil
+            limitTokenRefreshFailure = nil
             resetLimitsBackoff()
             recordLimitHistory()
             AppLog.write("limits refreshed by user action fiveHour=\(limits?.fiveHour?.utilization?.description ?? "nil") sevenDay=\(limits?.sevenDay?.utilization?.description ?? "nil")")
             AppLog.write("limits refreshed from keychain by user action")
         } catch {
-            limitTokenRefreshError = Self.friendlyLimitError(error, L(localizationLanguage))
+            limitTokenRefreshFailure = error
             if limits == nil { limitsAvailable = false }
             updateAuthExpired(from: error)
             applyLimitsBackoffIfRateLimited(error)
@@ -1013,7 +1076,10 @@ final class UsageStore {
     /// 마지막 검증에서 확인된 후보 조직 — 2개 이상일 때만 설정에 선택 UI 를 띄운다.
     var sessionKeyOrganizations: [SessionKeyOrganization] = []
     var sessionKeySelectedOrgID: String?
-    var sessionKeyError: String?
+    private var sessionKeyFailure: (any Error)?
+    var sessionKeyError: String? {
+        sessionKeyFailure.map { Self.friendlyLimitError($0, L(localizationLanguage)) }
+    }
     var isValidatingSessionKey = false
 
     /// 붙여넣은 키를 검증하고 저장한다. 검증은 조직 목록 조회 — 성공하면 볼 수 있는 조직이 확정되므로,
@@ -1021,7 +1087,7 @@ final class UsageStore {
     func saveSessionKey(_ raw: String) async {
         guard !isValidatingSessionKey else { return }
         isValidatingSessionKey = true
-        sessionKeyError = nil
+        sessionKeyFailure = nil
         defer { isValidatingSessionKey = false }
 
         do {
@@ -1037,7 +1103,7 @@ final class UsageStore {
             AppLog.write("session key saved (orgs=\(organizations.count) picked=\(picked.id))")
             await refresh()
         } catch {
-            sessionKeyError = Self.friendlyLimitError(error, L(localizationLanguage))
+            sessionKeyFailure = error
             AppLog.write("session key save failed: \(error)")
         }
     }
@@ -1064,7 +1130,7 @@ final class UsageStore {
         sessionKeyConfigured = false
         sessionKeyOrganizations = []
         sessionKeySelectedOrgID = nil
-        sessionKeyError = nil
+        sessionKeyFailure = nil
         AppLog.write("session key cleared")
         Task { await refresh() }   // OAuth 경로로 되돌아간다(또는 한도 섹션을 숨긴다)
     }
@@ -1078,7 +1144,7 @@ final class UsageStore {
             AppLog.write("session key org switched to \(id)")
             await refresh()
         } catch {
-            sessionKeyError = Self.friendlyLimitError(error, L(localizationLanguage))
+            sessionKeyFailure = error
         }
     }
 
@@ -1116,7 +1182,7 @@ final class UsageStore {
         guard !isRefreshingAntigravityLimits else { return }
         isRefreshingAntigravityLimits = true
         defer { isRefreshingAntigravityLimits = false }
-        antigravityLimitRefreshError = nil
+        antigravityLimitRefreshFailure = nil
         await refreshAntigravityLimits(allowKeychainPrompt: true)
     }
 
@@ -1139,7 +1205,7 @@ final class UsageStore {
             antigravityLimits = status
             antigravityLimitsUpdatedAt = Date()
             antigravityLimitsAuthExpired = false
-            antigravityLimitRefreshError = nil
+            antigravityLimitRefreshFailure = nil
             recordAntigravityLimitHistory()
             let groupsDesc = status.groups.map { group in
                 "\(group.displayName): " + group.buckets.map { "\($0.bucketId)=\(String(format: "%.1f", $0.usedPercent))%" }.joined(separator: ", ")
@@ -1153,7 +1219,7 @@ final class UsageStore {
             // 사용자가 누른 경우에만 화면에 사유를 남긴다. 자동 폴 실패까지 띄우면 미설치·미구독
             // 사용자에게 지워지지 않는 오류 문구가 상주한다.
             if allowKeychainPrompt {
-                antigravityLimitRefreshError = Self.friendlyLimitError(error, L(localizationLanguage))
+                antigravityLimitRefreshFailure = error
             }
             AppLog.writeIfChanged("antigravity-limits", "antigravity limits unavailable: \(error)")
         }

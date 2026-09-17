@@ -10,6 +10,7 @@ public struct AntigravityRateLimitsProvider: AntigravityLimitsProviding, Sendabl
     public static let primaryURL = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")!
     public static let dailyURL = URL(string: "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")!
     public static let googleTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+    /// Google Cloud Code / Antigravity 공식 CLI(`agy`) 바이너리에 내장된 공개 OAuth Client ID.
     public static let googleClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 
     private let tokenCache: AntigravityTokenCache
@@ -315,6 +316,15 @@ actor AntigravityTokenCache {
         //    파일로 답할 수 있으면 여기서 끝낸다. 캐시 히트보다 앞: 파일 로드는 expiresAt=nil 이라
         //    캐시가 만료로 풀리지 않고, 계정 전환으로 파일이 바뀌어도 옛 토큰을 계속 쓰는 결함을 방지(#227).
         if let fileCred = Self.readTokenFile(urls: tokenFileURLs) {
+            // 캐시가 이미 refresh_token 으로 새 토큰을 받아 유효하고 파일과 같은 출처(같은 계정)일 때만
+            // 디스크의 만료 토큰으로 덮어쓰지 않는다 — 다른 계정의 만료 직전 파일로 바뀌었으면 옛 캐시를 내면 안 된다.
+            if !bypassCache,
+               let cached = cachedCredential,
+               !cached.isExpired,
+               fileCred.isExpired,
+               Self.isSameSourceCredential(cached: cached, file: fileCred) {
+                return cached.accessToken
+            }
             if cachedCredential?.accessToken != fileCred.accessToken {
                 adopt(fileCred)
             }
@@ -365,7 +375,7 @@ actor AntigravityTokenCache {
         //       곧장 프롬프트를 띄우면, 프롬프트를 없애려고 만든 갱신 버튼이 매 탭마다 프롬프트를 낸다.
         //   3c. 그것도 안 되면 그때 프롬프트를 동반해 읽는다.
         if let cred = Self.readKeychainSilently() {
-            return try await resolveValidToken(from: cred)
+            return try await resolveValidToken(from: cred, bypassCache: bypassCache)
         }
         if cachedCredential == nil { cachedCredential = loadPersistedCredential() }
         if let refreshToken = cachedCredential?.refreshToken,
@@ -373,14 +383,14 @@ actor AntigravityTokenCache {
             return token
         }
         let cred = try Self.readKeychain(allowKeychainPrompt: true)
-        return try await resolveValidToken(from: cred)
+        return try await resolveValidToken(from: cred, bypassCache: bypassCache)
     }
 
-    private func resolveValidToken(from cred: AntigravityOAuthCredential) async throws -> String {
-        if !cred.isExpired {
+    private func resolveValidToken(from cred: AntigravityOAuthCredential, bypassCache: Bool = false) async throws -> String {
+        if !bypassCache && !cred.isExpired {
             return adopt(cred).accessToken
         }
-        // 만료되었고 refresh_token이 있다면 갱신 시도
+        // 만료되었거나 bypassCache인 경우 refresh_token이 있다면 갱신 시도
         if let refreshToken = cred.refreshToken,
            let token = applyRefresh(await refreshCredential(refreshToken: refreshToken)) {
             return token
@@ -392,6 +402,21 @@ actor AntigravityTokenCache {
     func invalidate() {
         cachedCredential = nil
         clearPersistedCredential()
+    }
+
+    private static func isSameSourceCredential(
+        cached: AntigravityOAuthCredential,
+        file: AntigravityOAuthCredential
+    ) -> Bool {
+        if cached.accessToken == file.accessToken {
+            return true
+        }
+        if let cachedRefresh = cached.refreshToken, !cachedRefresh.isEmpty,
+           let fileRefresh = file.refreshToken, !fileRefresh.isEmpty,
+           cachedRefresh == fileRefresh {
+            return true
+        }
+        return false
     }
 
     private func persistCredential(_ credential: AntigravityOAuthCredential) {

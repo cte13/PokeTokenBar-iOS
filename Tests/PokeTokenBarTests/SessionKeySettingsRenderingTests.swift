@@ -34,8 +34,15 @@ final class SessionKeySettingsRenderingTests: XCTestCase {
             previousKeyWindow?.makeKey()
         }
         host.view.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(500))
-        host.view.layoutSubtreeIfNeeded()
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(100))
+            host.view.layoutSubtreeIfNeeded()
+            let views = descendants(of: host.view)
+            if let secure = views.compactMap({ $0 as? NSSecureTextField }).first {
+                let rect = secure.convert(secure.bounds, to: host.view)
+                if host.view.bounds.contains(rect) { break }
+            }
+        }
         let views = descendants(of: host.view)
         let secure = try XCTUnwrap(views.compactMap { $0 as? NSSecureTextField }.first)
         let rect = secure.convert(secure.bounds, to: host.view)

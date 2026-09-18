@@ -39,10 +39,19 @@ protocol ClaudeLimitsProviding: Sendable {
 /// 비공식 endpoint 이므로 실패해도 토큰 표시에는 영향 없음 (한도 섹션만 숨김).
 struct OAuthLimitsProvider: ClaudeLimitsProviding, Sendable {
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private let accessTokenCache = OAuthAccessTokenCache.shared
+    private let accessTokenCache: OAuthAccessTokenCache
+
+    init(accessTokenCache: OAuthAccessTokenCache = .shared) {
+        self.accessTokenCache = accessTokenCache
+    }
 
     func fetch(allowKeychainPrompt: Bool = false) async throws -> LimitStatus {
-        let token = try await accessTokenCache.accessToken(allowKeychainPrompt: allowKeychainPrompt)
+        // 사용자 갱신은 캐시를 건너뛴다. 이전 계정의 토큰이 아직 유효하면 401 이 안 나고,
+        // 메모리 캐시가 Keychain 의 새 계정을 영원히 가린다(#300). 자동 폴은 false 그대로 —
+        // 키체인 다이얼로그를 띄우면 안 된다.
+        let token = try await accessTokenCache.accessToken(
+            allowKeychainPrompt: allowKeychainPrompt,
+            bypassCache: allowKeychainPrompt)
         var activeToken = token
         var status: LimitStatus
         do {
@@ -77,7 +86,7 @@ struct OAuthLimitsProvider: ClaudeLimitsProviding, Sendable {
         // 사용자 경로 단언(키체인을 읽어야 한다)이 0 이 되어, 짝인 자동경로 단언이 "아무도 안 읽는다"로도
         // 만족되는 공허한 가드가 된다(#210 이 막으려던 바로 그 상태). 자격증명 읽기는 그대로 두고
         // 나가는 호출만 막는다. profile 조회는 이 함수가 성공해야 도달하므로 여기서 함께 차단된다.
-        guard AppEnv.isBundledApp || AppEnv.isParityRun else { throw LimitsError.liveFetchNotPermitted }
+        guard AppEnv.isBundledApp || AppEnv.isParityRun || AppEnv.allowLiveFetchForTesting else { throw LimitsError.liveFetchNotPermitted }
         var request = URLRequest(url: Self.usageURL, timeoutInterval: 15)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -188,6 +197,8 @@ actor OAuthAccessTokenCache {
         // → Keychain 읽기는 명시적 사용자 동작(설정/팝오버의 갱신 버튼, allowKeychainPrompt=true)에서만
         // 수행한다. 파일이 유효 토큰을 들고 있으면 매 폴이 그걸 쓴다. 파일이 없거나 oauth 가 빠진
         // 뒤에만 캐시가 버티고, 그것도 만료되면 한도는 stale 표시 후 사용자가 갱신한다.
+        // 그 사용자 갱신은 `bypassCache: true` 로 들어온다(#300) — 옛 토큰이 아직 유효해도
+        // 여기서 캐시를 돌려주면 계정 전환이 버튼으로도 안 끝난다.
         // 자동 경로는 여기서 끝난다(키체인 미열람). 파일이 있는데 계정 OAuth 만 없으면 재로그인이
         // 답이므로 그때만 안내를 바꾼다 — 판정은 이 분기 안에서 해야 사용자 경로가 파일을 두 번 읽지 않는다.
         guard allowKeychainPrompt else {

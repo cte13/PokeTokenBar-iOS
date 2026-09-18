@@ -16,6 +16,9 @@ enum AppEnv {
         ProcessInfo.processInfo.environment["PTB_PARITY"] == "1"
     }
 
+    /// 테스트에서 URLProtocol 등 가짜 네트워크를 등록하고 fetch 를 돌릴 때 게이트 바이패스
+    nonisolated(unsafe) static var allowLiveFetchForTesting: Bool = false
+
     /// 사용자 상태 파일(Application Support 등)을 실제로 읽고 쓸 것인가.
     ///
     /// 경로를 주입받았으면 항상 참 — 테스트가 격리된 임시 파일로 지속성을 검증하는 통로다.

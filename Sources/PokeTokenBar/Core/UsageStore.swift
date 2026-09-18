@@ -165,11 +165,16 @@ final class UsageStore {
         didSet {
             defaults.set(disableKeychainAccess, forKey: "disableKeychainAccess")   // 저장 누락이던 기존 버그 — 재시작 후 풀렸음
             KeychainAccessGate.isDisabled = disableKeychainAccess
-            // 세션 키가 있으면 Keychain 없이도 한도를 조회할 수 있으므로 섹션을 지우지 않는다.
+            // 세션 키/토큰 파일이 있으면 Keychain 없이도 한도를 조회할 수 있으므로 섹션을 지우지 않는다.
             if disableKeychainAccess && !sessionKeyConfigured {
                 limits = nil
                 limitsAvailable = false
-            } else {
+            }
+            if disableKeychainAccess && !antigravityLimitsProvider.hasTokenFile {
+                antigravityLimits = nil
+                antigravityLimitsAuthExpired = false
+            }
+            if !disableKeychainAccess || sessionKeyConfigured || antigravityLimitsProvider.hasTokenFile {
                 Task { await refresh() }
             }
         }
@@ -355,6 +360,18 @@ final class UsageStore {
 
     func limitDisplayPercent(_ utilization: Double) -> Double {
         Self.displayPercent(utilization, mode: limitDisplayMode)
+    }
+
+    /// 페이스(균등 소진) 기준선 — 창이 얼마나 지났는지(0…1). 시간 기반이라 burn 데이터가 없어도,
+    /// 어느 프로바이더든 리셋 시각과 창 길이만 있으면 나온다(`fiveHourForecast` 의 burn 외삽과 보완 관계).
+    /// 0…1 밖이면 **clamp 하지 않고 nil** — 5시간 창은 첫 요청 때 시작하므로 유휴 상태에 낡은
+    /// resets_at 이 남을 수 있고, 그걸 양 끝으로 붙여 그리면 "막 시작/끝났다"는 거짓말이 된다.
+    /// 잘못된 위치의 선은 선이 없는 것보다 나쁘다.
+    nonisolated static func paceFraction(resetsAt: Date, span: TimeInterval, now: Date) -> Double? {
+        guard span > 0 else { return nil }
+        let fraction = (span - resetsAt.timeIntervalSince(now)) / span
+        guard fraction.isFinite, (0...1).contains(fraction) else { return nil }
+        return fraction
     }
 
     /// 단일 줄 표현 — 관찰(observeStore)·접근성·1줄 렌더 폴백용. 세로 렌더는 menuLines 사용.
@@ -593,17 +610,18 @@ final class UsageStore {
         }
         for group in antigravityLimits?.groups ?? [] {
             let groupKey = group.displayName.localizedCaseInsensitiveContains("gemini") ? "gemini" : "3p"
+            let groupTitle = l.antigravityGroupTitle(group.displayName)
             if let fiveHour = group.fiveHourBucket {
                 windows.append(CandyWindow(
                     key: "antigravity.\(groupKey).5h",
-                    name: "\(group.displayName) \(l.fiveHourSession)",
+                    name: "\(groupTitle) \(l.fiveHourSession)",
                     kind: .session,
                     utilization: fiveHour.usedPercent))
             }
             if let weekly = group.weeklyBucket {
                 windows.append(CandyWindow(
                     key: "antigravity.\(groupKey).weekly",
-                    name: "\(group.displayName) \(l.weekly)",
+                    name: "\(groupTitle) \(l.weekly)",
                     kind: .weekly,
                     utilization: weekly.usedPercent))
             }
@@ -923,7 +941,8 @@ final class UsageStore {
                     // 누적만으로 만들면, weekTotal 이 옵셔널이 아니라(토큰 0이어도 non-nil) 오늘·최근
                     // 미사용 프로바이더까지 탭이 떠서 "안 썼는데 왜 뜨지" 회귀가 난다. 블록이 있을 때만
                     // 그 시점의 주/월도 함께 보존한다.
-                    let hasActiveBlock = enrichment.blocksOK && enrichment.activeBlock != nil
+                    let hasActiveBlock = enrichment.blocksOK
+                        && (enrichment.activeBlock?.totalTokens ?? 0) > 0
                     if hasActiveBlock, let provider = activeProviders.first(where: { $0.id == id }) {
                         snapshots.append(ProviderSnapshot(
                             providerID: id, displayName: provider.displayName, today: nil,
@@ -1148,6 +1167,10 @@ final class UsageStore {
         }
     }
 
+    var antigravityHasTokenFile: Bool {
+        antigravityLimitsProvider.hasTokenFile
+    }
+
     /// 보관 상태를 다시 읽는다(설정 화면 진입·폐기 직후).
     func refreshAntigravityCredentialSummary() async {
         antigravityCredentialSummary = await AntigravityTokenCache.shared.storedCredentialSummary()
@@ -1187,7 +1210,7 @@ final class UsageStore {
     }
 
     private func refreshAntigravityLimits(allowKeychainPrompt: Bool) async {
-        if disableKeychainAccess {
+        if disableKeychainAccess && !antigravityLimitsProvider.hasTokenFile {
             antigravityLimits = nil
             antigravityLimitsAuthExpired = false
             return
@@ -1485,7 +1508,8 @@ final class UsageStore {
     }
 
     /// (unique key, display name, utilization) for every window the popover shows as a limit row.
-    private func buildLimitWindows() -> [(key: String, name: String, utilization: Double)] {
+    /// Internal so tests can assert alert copy matches the popover language (#322).
+    func buildLimitWindows() -> [(key: String, name: String, utilization: Double)] {
         let l = L(localizationLanguage)
         var windows: [(key: String, name: String, utilization: Double)] = []
         if let limits {
@@ -1541,10 +1565,11 @@ final class UsageStore {
         }
         for group in antigravityLimits?.groups ?? [] {
             let groupKey = group.displayName.localizedCaseInsensitiveContains("gemini") ? "gemini" : "3p"
+            let groupTitle = l.antigravityGroupTitle(group.displayName)
             for bucket in group.buckets {
                 let windowName = l.antigravityWindow(window: bucket.window, bucketId: bucket.bucketId)
                 windows.append(("antigravity.\(groupKey).\(bucket.bucketId)",
-                                "\(group.displayName) \(windowName)",
+                                "\(groupTitle) \(windowName)",
                                 bucket.usedPercent))
             }
         }

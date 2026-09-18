@@ -474,6 +474,8 @@ final class FloatingPetEnergyTests: XCTestCase {
             l.opencodeGoFiveHour,
             l.opencodeGoWeekly,
             l.opencodeGoMonthly,
+            "\(l.antigravityGeminiGroup) \(l.fiveHourSession)",
+            "\(l.antigravityThirdPartyGroup) \(l.weekly)",
         ]
     }
 

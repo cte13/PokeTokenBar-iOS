@@ -26,6 +26,8 @@ public struct PhonePayload: Codable, Sendable, Equatable {
     public let monthCost: Double?
     /// Claude 5h depletion forecast (nil when no forecast can be made).
     public let burn: PhoneBurnForecast?
+    /// Catch log — individual caught mon records (read-only mirror of Mac catch log).
+    public let catchLog: [PhoneDexEntry]
 
     public init(todayTokens: Int, todayCost: Double, weekTokens: Int, monthTokens: Int,
                 lastUpdated: Date, serverVersion: String, limits: PhoneLimitStatus?,
@@ -33,7 +35,8 @@ public struct PhonePayload: Codable, Sendable, Equatable {
                 bag: [PhoneBagItem] = [], dex: [PhoneDexSpecies] = [],
                 spendableTokens: Int = 0, shop: [PhoneShopEntry] = [],
                 weekCost: Double? = nil, monthCost: Double? = nil,
-                burn: PhoneBurnForecast? = nil) {
+                burn: PhoneBurnForecast? = nil,
+                catchLog: [PhoneDexEntry] = []) {
         self.todayTokens = todayTokens
         self.todayCost = todayCost
         self.weekTokens = weekTokens
@@ -50,9 +53,10 @@ public struct PhonePayload: Codable, Sendable, Equatable {
         self.weekCost = weekCost
         self.monthCost = monthCost
         self.burn = burn
+        self.catchLog = catchLog
     }
 
-    /// Older Mac versions publish payloads without `bag`/`dex`/`shop` — decode them
+    /// Older Mac versions publish payloads without `bag`/`dex`/`shop`/`catchLog` — decode them
     /// as empty instead of failing the whole sync.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -72,6 +76,7 @@ public struct PhonePayload: Codable, Sendable, Equatable {
         weekCost = try c.decodeIfPresent(Double.self, forKey: .weekCost)
         monthCost = try c.decodeIfPresent(Double.self, forKey: .monthCost)
         burn = try c.decodeIfPresent(PhoneBurnForecast.self, forKey: .burn)
+        catchLog = try c.decodeIfPresent([PhoneDexEntry].self, forKey: .catchLog) ?? []
     }
 }
 
@@ -432,7 +437,7 @@ public struct PhoneBagItem: Codable, Sendable, Equatable, Identifiable {
 
 /// One collected species — graduated records ∪ the current mon's reached stages.
 /// Species-level only (nature/catch-time are Mac-side catch-log details).
-public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable {
+public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// Species ID = national dex number (sort key).
     public let id: Int
     /// Pre-localized species name from the Mac.
@@ -443,13 +448,201 @@ public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable {
     public let isShiny: Bool
     /// The only evidence is the currently-raised mon — the cell can disappear.
     public let isRaising: Bool
+    /// Whether this species is pinned as the representative companion.
+    public let isRepresentative: Bool?
+    /// Number of distinct Unown forms collected (only for Unown species #201).
+    public let unownFormCount: Int?
+    /// Collected Unown forms list (only for Unown species #201).
+    public let unownForms: [PhoneUnownForm]?
+    /// Extended PokéAPI species metadata pre-localized by the Mac.
+    public let details: PhoneSpeciesDetails?
 
-    public init(id: Int, name: String, rarity: String, isShiny: Bool, isRaising: Bool) {
+    public init(id: Int, name: String, rarity: String, isShiny: Bool, isRaising: Bool,
+                isRepresentative: Bool? = nil, unownFormCount: Int? = nil,
+                unownForms: [PhoneUnownForm]? = nil, details: PhoneSpeciesDetails? = nil) {
         self.id = id
         self.name = name
         self.rarity = rarity
         self.isShiny = isShiny
         self.isRaising = isRaising
+        self.isRepresentative = isRepresentative
+        self.unownFormCount = unownFormCount
+        self.unownForms = unownForms
+        self.details = details
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        rarity = try c.decode(String.self, forKey: .rarity)
+        isShiny = try c.decode(Bool.self, forKey: .isShiny)
+        isRaising = try c.decode(Bool.self, forKey: .isRaising)
+        isRepresentative = try c.decodeIfPresent(Bool.self, forKey: .isRepresentative)
+        unownFormCount = try c.decodeIfPresent(Int.self, forKey: .unownFormCount)
+        unownForms = try c.decodeIfPresent([PhoneUnownForm].self, forKey: .unownForms)
+        details = try c.decodeIfPresent(PhoneSpeciesDetails.self, forKey: .details)
+    }
+}
+
+/// One collected Unown form.
+public struct PhoneUnownForm: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { form }
+    public let form: String         // "a", "b", ..., "question", "exclamation"
+    public let symbol: String       // "A", "B", ..., "?", "!"
+    public let isShiny: Bool
+    public let isRepresentative: Bool
+
+    public init(form: String, symbol: String, isShiny: Bool, isRepresentative: Bool = false) {
+        self.form = form
+        self.symbol = symbol
+        self.isShiny = isShiny
+        self.isRepresentative = isRepresentative
+    }
+}
+
+/// Species battle & Pokedex metadata, pre-localized by the Mac.
+public struct PhoneSpeciesDetails: Codable, Sendable, Equatable, Hashable {
+    public let types: [String]
+    public let height: Int          // decimetres (4 -> 0.4 m)
+    public let weight: Int          // hectograms (60 -> 6.0 kg)
+    public let baseStatTotal: Int
+    public let baseStats: [PhoneBaseStat]
+    public let possibleAbilities: [PhoneAbilityOption]
+    public let moveList: [PhoneMoveListing]
+
+    public init(types: [String], height: Int, weight: Int, baseStatTotal: Int,
+                baseStats: [PhoneBaseStat], possibleAbilities: [PhoneAbilityOption],
+                moveList: [PhoneMoveListing]) {
+        self.types = types
+        self.height = height
+        self.weight = weight
+        self.baseStatTotal = baseStatTotal
+        self.baseStats = baseStats
+        self.possibleAbilities = possibleAbilities
+        self.moveList = moveList
+    }
+}
+
+public struct PhoneBaseStat: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { name }
+    public let name: String
+    public let label: String
+    public let value: Int
+
+    public init(name: String, label: String, value: Int) {
+        self.name = name
+        self.label = label
+        self.value = value
+    }
+}
+
+public struct PhoneAbilityOption: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { name }
+    public let name: String
+    public let isHidden: Bool
+
+    public init(name: String, isHidden: Bool) {
+        self.name = name
+        self.isHidden = isHidden
+    }
+}
+
+public struct PhoneMoveListing: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { name }
+    public let name: String
+    public let methods: [String]
+
+    public init(name: String, methods: [String]) {
+        self.name = name
+        self.methods = methods
+    }
+}
+
+// MARK: - Catch Log (read-only)
+
+/// One individual catch record from the Mac's catch log.
+public struct PhoneDexEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public let id: String
+    public let baseID: Int
+    public let finalID: Int
+    public let rarity: String
+    public let isShiny: Bool
+    public let isRaising: Bool
+    public let isReleased: Bool
+    public let natureName: String?
+    public let caughtAt: Date?
+    public let chainOrder: [Int]
+    public let chainNames: [Int: String]
+    public let unownForm: String?
+    public let profile: PhoneIndividualProfile?
+
+    public init(id: String, baseID: Int, finalID: Int, rarity: String,
+                isShiny: Bool, isRaising: Bool, isReleased: Bool,
+                natureName: String?, caughtAt: Date?, chainOrder: [Int],
+                chainNames: [Int: String], unownForm: String?,
+                profile: PhoneIndividualProfile? = nil) {
+        self.id = id
+        self.baseID = baseID
+        self.finalID = finalID
+        self.rarity = rarity
+        self.isShiny = isShiny
+        self.isRaising = isRaising
+        self.isReleased = isReleased
+        self.natureName = natureName
+        self.caughtAt = caughtAt
+        self.chainOrder = chainOrder
+        self.chainNames = chainNames
+        self.unownForm = unownForm
+        self.profile = profile
+    }
+}
+
+public struct PhoneIndividualProfile: Codable, Sendable, Equatable, Hashable {
+    public let level: Int
+    public let gender: String?
+    public let genderLabel: String?
+    public let abilityName: String?
+    public let abilityIsHidden: Bool
+    public let stats: [PhoneComputedStat]
+    public let moves: [PhoneKnownMove]
+
+    public init(level: Int, gender: String?, genderLabel: String?,
+                abilityName: String?, abilityIsHidden: Bool,
+                stats: [PhoneComputedStat], moves: [PhoneKnownMove]) {
+        self.level = level
+        self.gender = gender
+        self.genderLabel = genderLabel
+        self.abilityName = abilityName
+        self.abilityIsHidden = abilityIsHidden
+        self.stats = stats
+        self.moves = moves
+    }
+}
+
+public struct PhoneComputedStat: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { name }
+    public let name: String
+    public let label: String
+    public let value: Int
+    public let iv: Int?
+
+    public init(name: String, label: String, value: Int, iv: Int?) {
+        self.name = name
+        self.label = label
+        self.value = value
+        self.iv = iv
+    }
+}
+
+public struct PhoneKnownMove: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { "\(name)-\(learnedAtLevel)" }
+    public let name: String
+    public let learnedAtLevel: Int
+
+    public init(name: String, learnedAtLevel: Int) {
+        self.name = name
+        self.learnedAtLevel = learnedAtLevel
     }
 }
 

@@ -351,8 +351,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 fallbackEmoji: item.kind.fallbackEmoji)
         }
         let dex = companion.dexSpecies.map { sp in
-            PhoneDexSpecies(id: sp.id, name: sp.name, rarity: sp.rarity.rawValue,
-                            isShiny: sp.isShiny, isRaising: sp.isRaising)
+            let isRep = companion.isRepresentative(sp)
+            let unownCount: Int? = (sp.id == UnownForm.speciesID) ? companion.state.collectedUnownForms.count : nil
+            let unownForms: [PhoneUnownForm]? = (sp.id == UnownForm.speciesID) ? companion.unownFormSpecies.compactMap { formSp in
+                guard let form = formSp.unownForm else { return nil }
+                return PhoneUnownForm(form: form.rawValue, symbol: form.symbol, isShiny: formSp.isShiny,
+                                      isRepresentative: companion.isRepresentative(formSp))
+            } : nil
+            let details = Self.phoneSpeciesDetails(speciesID: sp.id, companion: companion)
+            return PhoneDexSpecies(id: sp.id, name: sp.name, rarity: sp.rarity.rawValue,
+                                   isShiny: sp.isShiny, isRaising: sp.isRaising,
+                                   isRepresentative: isRep, unownFormCount: unownCount,
+                                   unownForms: unownForms, details: details)
+        }
+        let catchLog = companion.dexEntriesSorted.map { entry in
+            Self.phoneDexEntry(entry, companion: companion)
         }
         let payload = PhonePayload(
             todayTokens: store.todayTotalTokens,
@@ -371,7 +384,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             weekCost: store.weekCostTotal,
             monthCost: store.monthCostTotal,
             burn: Self.phoneBurnForecast(forecast: store.fiveHourForecast,
-                                         tokensPerMinute: store.combinedBurnPerMinuteForPhone))
+                                         tokensPerMinute: store.combinedBurnPerMinuteForPhone),
+            catchLog: catchLog)
+        for sp in companion.dexSpecies where companion.pokemonDetailsByID[sp.id] == nil {
+            Task { [weak companion] in
+                await companion?.loadPokemonDetails(speciesID: sp.id)
+            }
+        }
         if phoneServer.isRunning, let data = try? JSONEncoder().encode(payload) {
             phoneServer.updatePairingCode(store.phoneServerPairingCode)
             phoneServer.updatePayload(data)
@@ -564,6 +583,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     lockedReason: companion.hasActive ? nil : l.eggShopLockedHint)
             }
         }
+    }
+
+    /// 포획 로그 항목을 폰 페이로드 규격으로 변환한다.
+    static func phoneDexEntry(_ entry: DexEntry, companion: CompanionStore) -> PhoneDexEntry {
+        let stored = companion.dexStoredChainNames(entry) ?? [:]
+        let names = Dictionary(uniqueKeysWithValues: entry.chainOrder.map { ($0, stored[$0] ?? "#\($0)") })
+        let isAct = companion.isActiveDexEntry(entry)
+        let natName = entry.nature?.name(companion.language)
+        let profile = entry.profile.map { prof -> PhoneIndividualProfile in
+            let genderLabel = companion.l.genderLabel(prof.gender)
+            let stats: [PhoneComputedStat]
+            if let details = companion.pokemonDetailsByID[entry.finalID] {
+                let computed = PokemonStatCalculator.stats(details: details, profile: prof, nature: entry.nature)
+                stats = computed.map { PhoneComputedStat(name: $0.name, label: companion.l.statLabel($0.name), value: $0.value, iv: $0.iv) }
+            } else {
+                stats = []
+            }
+            let moves = prof.moves.map { move in
+                let moveName = PokemonNameDisplayStore.shared.names[.init(kind: .move, name: move.name)]?[companion.language.rawValue]
+                    ?? PokemonNameLocalization.identifier(move.name)
+                return PhoneKnownMove(name: moveName, learnedAtLevel: move.learnedAtLevel)
+            }
+            let abilityName: String?
+            if let rawAbility = prof.abilityName {
+                abilityName = PokemonNameDisplayStore.shared.names[.init(kind: .ability, name: rawAbility)]?[companion.language.rawValue]
+                    ?? PokemonNameLocalization.identifier(rawAbility)
+            } else {
+                abilityName = nil
+            }
+            return PhoneIndividualProfile(
+                level: prof.level,
+                gender: prof.gender?.rawValue,
+                genderLabel: genderLabel,
+                abilityName: abilityName,
+                abilityIsHidden: prof.abilityIsHidden,
+                stats: stats,
+                moves: moves
+            )
+        }
+        return PhoneDexEntry(
+            id: entry.id,
+            baseID: entry.baseID,
+            finalID: entry.finalID,
+            rarity: entry.rarity.rawValue,
+            isShiny: entry.isShiny,
+            isRaising: isAct,
+            isReleased: entry.isReleased,
+            natureName: natName,
+            caughtAt: entry.caughtAt,
+            chainOrder: entry.chainOrder,
+            chainNames: names,
+            unownForm: entry.unownForm?.rawValue,
+            profile: profile
+        )
+    }
+
+    /// 종별 전투/도감 상세 정보를 폰 페이로드 규격으로 변환한다 (캐시된 종만).
+    static func phoneSpeciesDetails(speciesID: Int, companion: CompanionStore) -> PhoneSpeciesDetails? {
+        guard let details = companion.pokemonDetailsByID[speciesID] else { return nil }
+        let baseStats = PokemonStatCalculator.order.compactMap { stat -> PhoneBaseStat? in
+            guard let val = details.baseStats[stat] else { return nil }
+            return PhoneBaseStat(name: stat, label: companion.l.statLabel(stat), value: val)
+        }
+        let abilities = details.abilities.map { opt in
+            let name = PokemonNameDisplayStore.shared.names[.init(kind: .ability, name: opt.name)]?[companion.language.rawValue]
+                ?? PokemonNameLocalization.identifier(opt.name)
+            return PhoneAbilityOption(name: name, isHidden: opt.isHidden)
+        }
+        let moves = details.moves.map { move in
+            let name = PokemonNameDisplayStore.shared.names[.init(kind: .move, name: move.name)]?[companion.language.rawValue]
+                ?? PokemonNameLocalization.identifier(move.name)
+            let methods = move.learnMethods.map(companion.l.moveMethod).reduce(into: [String]()) { res, val in
+                if !res.contains(val) { res.append(val) }
+            }
+            return PhoneMoveListing(name: name, methods: methods)
+        }
+        return PhoneSpeciesDetails(
+            types: details.types,
+            height: details.height,
+            weight: details.weight,
+            baseStatTotal: details.baseStatTotal,
+            baseStats: baseStats,
+            possibleAbilities: abilities,
+            moveList: moves
+        )
     }
 
     // MARK: 메뉴바 애니메이션

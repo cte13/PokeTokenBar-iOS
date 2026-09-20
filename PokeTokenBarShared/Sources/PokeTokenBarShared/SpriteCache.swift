@@ -4,26 +4,48 @@ import Foundation
 public enum PokeSpriteURL {
     private static let base = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"
 
-    public static func species(id: Int, shiny: Bool) -> URL? {
-        URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(id).png")
+    public static func species(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
+        let name: String
+        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
+            name = "\(id)-\(form)"
+        } else {
+            name = "\(id)"
+        }
+        return URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(name).png")
     }
 
     /// Gen-V animated GIF — only species 1…649 have one (same rule as the Mac's PokemonAssets).
     public static func hasAnimatedSprite(id: Int) -> Bool { (1...649).contains(id) }
 
-    public static func animatedSpecies(id: Int, shiny: Bool) -> URL? {
+    public static func animatedSpecies(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
         guard hasAnimatedSprite(id: id) else { return nil }
-        return URL(string: "\(base)/pokemon/versions/generation-v/black-white/animated/\(shiny ? "shiny/" : "")\(id).gif")
+        let name: String
+        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
+            name = "\(id)-\(form)"
+        } else {
+            name = "\(id)"
+        }
+        return URL(string: "\(base)/pokemon/versions/generation-v/black-white/animated/\(shiny ? "shiny/" : "")\(name).gif")
     }
 
-    public static func animatedSpeciesKey(id: Int, shiny: Bool) -> String { "\(id)_\(shiny)_anim.gif" }
+    public static func animatedSpeciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
+        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
+            return "\(id)_\(form)_\(shiny)_anim.gif"
+        }
+        return "\(id)_\(shiny)_anim.gif"
+    }
 
     public static func item(name: String) -> URL? {
         URL(string: "\(base)/items/\(name).png")
     }
 
     /// Stable on-disk file name for a species sprite — the same key the widget has always used.
-    public static func speciesKey(id: Int, shiny: Bool) -> String { "\(id)_\(shiny).png" }
+    public static func speciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
+        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
+            return "\(id)_\(form)_\(shiny).png"
+        }
+        return "\(id)_\(shiny).png"
+    }
     public static func itemKey(name: String) -> String { "item_\(name).png" }
 }
 

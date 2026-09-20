@@ -110,6 +110,87 @@ struct PhonePayloadTests {
         #expect(decoded.dex.isEmpty)
         #expect(decoded.shop.isEmpty)
         #expect(decoded.spendableTokens == 0)
+        #expect(decoded.catchLog.isEmpty)
+    }
+
+    @Test func catchLogAndDexDetailsCodableRoundTrip() throws {
+        let details = PhoneSpeciesDetails(
+            types: ["electric"],
+            height: 4,
+            weight: 60,
+            baseStatTotal: 320,
+            baseStats: [
+                PhoneBaseStat(name: "hp", label: "HP", value: 35),
+                PhoneBaseStat(name: "attack", label: "Attack", value: 55)
+            ],
+            possibleAbilities: [
+                PhoneAbilityOption(name: "Static", isHidden: false),
+                PhoneAbilityOption(name: "Lightning Rod", isHidden: true)
+            ],
+            moveList: [
+                PhoneMoveListing(name: "Thunder Shock", methods: ["Lv. 1"]),
+                PhoneMoveListing(name: "Thunderbolt", methods: ["TM"])
+            ]
+        )
+        let unownForm = PhoneUnownForm(form: "b", symbol: "B", isShiny: true, isRepresentative: true)
+        let species = PhoneDexSpecies(
+            id: 201, name: "Unown", rarity: "rare", isShiny: true, isRaising: false,
+            isRepresentative: true, unownFormCount: 5, unownForms: [unownForm],
+            details: details
+        )
+        let entry = PhoneDexEntry(
+            id: "entry-1", baseID: 172, finalID: 25, rarity: "common",
+            isShiny: true, isRaising: true, isReleased: false,
+            natureName: "Adamant", caughtAt: Date(timeIntervalSince1970: 1700000000),
+            chainOrder: [172, 25, 26],
+            chainNames: [172: "Pichu", 25: "Pikachu", 26: "Raichu"],
+            unownForm: nil,
+            profile: PhoneIndividualProfile(
+                level: 25, gender: "male", genderLabel: "Male",
+                abilityName: "Static", abilityIsHidden: false,
+                stats: [PhoneComputedStat(name: "hp", label: "HP", value: 58, iv: 31)],
+                moves: [PhoneKnownMove(name: "Thunder Shock", learnedAtLevel: 1)]
+            )
+        )
+
+        let payload = PhonePayload(
+            todayTokens: 100, todayCost: 1.0, weekTokens: 200, monthTokens: 300,
+            lastUpdated: Date(timeIntervalSince1970: 1700000000), serverVersion: "2.6.0",
+            limits: nil, companion: nil, providers: [],
+            dex: [species], catchLog: [entry]
+        )
+
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(PhonePayload.self, from: data)
+        #expect(decoded.dex.count == 1)
+        #expect(decoded.dex.first?.isRepresentative == true)
+        #expect(decoded.dex.first?.unownFormCount == 5)
+        #expect(decoded.dex.first?.unownForms?.first?.symbol == "B")
+        #expect(decoded.dex.first?.details?.baseStatTotal == 320)
+        #expect(decoded.catchLog.count == 1)
+        #expect(decoded.catchLog.first?.natureName == "Adamant")
+        #expect(decoded.catchLog.first?.chainOrder == [172, 25, 26])
+        #expect(decoded.catchLog.first?.profile?.level == 25)
+        #expect(decoded.catchLog.first?.profile?.stats.first?.iv == 31)
+    }
+
+    @Test func pokeSpriteURLUnownForm() {
+        // Unown default A uses standard 201.png
+        let defaultURL = PokeSpriteURL.species(id: 201, shiny: false, unownForm: "a")
+        #expect(defaultURL?.absoluteString.hasSuffix("/pokemon/201.png") == true)
+
+        // Non-A forms use 201-{form}.png
+        let bURL = PokeSpriteURL.species(id: 201, shiny: true, unownForm: "b")
+        #expect(bURL?.absoluteString.hasSuffix("/pokemon/shiny/201-b.png") == true)
+        #expect(PokeSpriteURL.speciesKey(id: 201, shiny: true, unownForm: "b") == "201_b_true.png")
+
+        // Exclamation form
+        let exURL = PokeSpriteURL.species(id: 201, shiny: false, unownForm: "exclamation")
+        #expect(exURL?.absoluteString.hasSuffix("/pokemon/201-exclamation.png") == true)
+
+        // Other species ignore unownForm
+        let pikaURL = PokeSpriteURL.species(id: 25, shiny: false, unownForm: "b")
+        #expect(pikaURL?.absoluteString.hasSuffix("/pokemon/25.png") == true)
     }
 
     // MARK: - CloudKitSync

@@ -185,4 +185,123 @@ final class PhonePayloadCodableTests: XCTestCase {
         XCTAssertEqual(back.limits?.orderedWindows.last?.label, "Antigravity Gemini 5h")
         XCTAssertEqual(back.companion?.lineNodes?.last?.speciesID, nil)
     }
+
+    /// catchLog 과 dex 확장 필드(details, unownForms, isRepresentative)가 없는 구 Mac 페이로드도
+    /// 기본값(catchLog=[], isRepresentative=false, details=nil)으로 안전하게 디코드된다.
+    func testLegacyPayloadWithoutCatchLogAndDetailsDecodesSafely() throws {
+        let legacy = Data("""
+        {"todayTokens":1,"todayCost":0.5,"weekTokens":2,"monthTokens":3,
+         "lastUpdated":0,"serverVersion":"1.0",
+         "dex":[{"id":25,"name":"Pikachu","rarity":"common","isShiny":false,"isRaising":false}],
+         "providers":[]}
+        """.utf8)
+        let payload = try JSONDecoder().decode(PhonePayload.self, from: legacy)
+        XCTAssertEqual(payload.catchLog, [])
+        let species = try XCTUnwrap(payload.dex.first)
+        XCTAssertEqual(species.id, 25)
+        XCTAssertNil(species.isRepresentative)
+        XCTAssertNil(species.unownFormCount)
+        XCTAssertNil(species.unownForms)
+        XCTAssertNil(species.details)
+    }
+
+    /// catchLog 및 개체 프로필(IV, 실능치, 기술)의 인코딩/디코딩 왕복을 검증한다.
+    func testCatchLogRoundTripsWithIndividualProfile() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let entry = PhoneDexEntry(
+            id: "11111111-2222-3333-4444-555555555555",
+            baseID: 25,
+            finalID: 26,
+            rarity: "common",
+            isShiny: true,
+            isRaising: true,
+            isReleased: false,
+            natureName: "Adamant",
+            caughtAt: date,
+            chainOrder: [25, 26],
+            chainNames: [25: "Pikachu", 26: "Raichu"],
+            unownForm: nil,
+            profile: PhoneIndividualProfile(
+                level: 30,
+                gender: "male",
+                genderLabel: "♂",
+                abilityName: "Static",
+                abilityIsHidden: false,
+                stats: [PhoneComputedStat(name: "hp", label: "HP", value: 85, iv: 31)],
+                moves: [PhoneKnownMove(name: "Thunderbolt", learnedAtLevel: 25)]
+            )
+        )
+        let payload = PhonePayload(
+            todayTokens: 10, todayCost: 1.0, weekTokens: 20, monthTokens: 30,
+            lastUpdated: date, serverVersion: "2.7.0",
+            limits: nil, companion: nil, providers: [],
+            catchLog: [entry]
+        )
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(PhonePayload.self, from: data)
+        XCTAssertEqual(decoded.catchLog.count, 1)
+        let decEntry = decoded.catchLog[0]
+        XCTAssertEqual(decEntry.id, entry.id)
+        XCTAssertEqual(decEntry.finalID, 26)
+        XCTAssertTrue(decEntry.isShiny)
+        XCTAssertTrue(decEntry.isRaising)
+        XCTAssertEqual(decEntry.natureName, "Adamant")
+        XCTAssertEqual(decEntry.chainNames[26], "Raichu")
+        let prof: PhoneIndividualProfile = try XCTUnwrap(decEntry.profile)
+        XCTAssertEqual(prof.level, 30)
+        XCTAssertEqual(prof.genderLabel, "♂")
+        XCTAssertEqual(prof.stats.first?.name, "hp")
+        XCTAssertEqual(prof.stats.first?.value, 85)
+        XCTAssertEqual(prof.stats.first?.iv, 31)
+        XCTAssertEqual(prof.moves.first?.name, "Thunderbolt")
+    }
+
+    /// 종족 상세 정보(타입, 종족값, 특성, 기술목록)와 안농 폼 목록의 인코딩/디코딩 왕복을 검증한다.
+    func testDexSpeciesDetailsAndUnownFormsRoundTrip() throws {
+        let details = PhoneSpeciesDetails(
+            types: ["electric"],
+            height: 4,
+            weight: 60,
+            baseStatTotal: 320,
+            baseStats: [
+                PhoneBaseStat(name: "hp", label: "HP", value: 35),
+                PhoneBaseStat(name: "attack", label: "Attack", value: 55),
+            ],
+            possibleAbilities: [
+                PhoneAbilityOption(name: "Static", isHidden: false),
+                PhoneAbilityOption(name: "Lightning Rod", isHidden: true),
+            ],
+            moveList: [
+                PhoneMoveListing(name: "Thunder Shock", methods: ["Level Up"]),
+            ]
+        )
+        let species = PhoneDexSpecies(
+            id: 201,
+            name: "Unown",
+            rarity: "rare",
+            isShiny: false,
+            isRaising: true,
+            isRepresentative: true,
+            unownFormCount: 3,
+            unownForms: [
+                PhoneUnownForm(form: "a", symbol: "A", isShiny: false),
+                PhoneUnownForm(form: "b", symbol: "B", isShiny: true),
+            ],
+            details: details
+        )
+        let data = try JSONEncoder().encode(species)
+        let decoded = try JSONDecoder().decode(PhoneDexSpecies.self, from: data)
+        XCTAssertEqual(decoded.id, 201)
+        XCTAssertEqual(decoded.isRepresentative, true)
+        XCTAssertEqual(decoded.unownFormCount, 3)
+        XCTAssertEqual(decoded.unownForms?.count, 2)
+        XCTAssertEqual(decoded.unownForms?[1].form, "b")
+        XCTAssertEqual(decoded.unownForms?[1].symbol, "B")
+        XCTAssertTrue(decoded.unownForms?[1].isShiny ?? false)
+        XCTAssertEqual(decoded.details?.types, ["electric"])
+        XCTAssertEqual(decoded.details?.baseStatTotal, 320)
+        XCTAssertEqual(decoded.details?.baseStats.count, 2)
+        XCTAssertEqual(decoded.details?.possibleAbilities.count, 2)
+        XCTAssertEqual(decoded.details?.moveList.first?.methods, ["Level Up"])
+    }
 }

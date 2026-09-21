@@ -130,19 +130,25 @@ struct PopoverView: View {
             } else if nav.tab == .shop {
                 ShopView(store: companion, nav: nav)
             } else {
-                CompanionHeader(store: companion)
-                Divider()
-                header
-                Divider()
-                providerStatusBanner   // 인시던트 있을 때만 — 한도 가용 여부와 무관(API 다운=한도 nil 케이스에도)
-                if selectedProviderHasLimits {
-                    limitsSection
-                    Divider()
+                // 고정 높이 — 상점/가방/컬렉션과 동일(팝오버가 화면을 넘어가는 것을 방지).
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CompanionHeader(store: companion)
+                        Divider()
+                        header
+                        Divider()
+                        providerStatusBanner   // 인시던트 있을 때만 — 한도 가용 여부와 무관(API 다운=한도 nil 케이스에도)
+                        if selectedProviderHasLimits {
+                            limitsSection
+                            Divider()
+                        }
+                        if shouldShowLimitHistory {
+                            limitHistorySection
+                            Divider()
+                        }
+                    }
                 }
-                if shouldShowLimitHistory {
-                    limitHistorySection
-                    Divider()
-                }
+                .frame(height: 520)
             }
             footer
         }

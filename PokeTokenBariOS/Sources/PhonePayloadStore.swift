@@ -14,6 +14,10 @@ final class PhonePayloadStore {
     var isLoading = false
     var lastError: String?
     var isConnected = false
+    /// Whether the most recent fetch() call succeeded. `nil` before the first attempt.
+    var lastFetchSucceeded: Bool?
+    /// Timestamp of the most recent successful fetch (not cache hydration).
+    var lastFetchDate: Date?
 
     enum Source: String { case iCloud, localNetwork }
     /// Which channel delivered the current payload (nil before the first successful fetch).
@@ -122,6 +126,8 @@ final class PhonePayloadStore {
                     payload = newPayload
                     source = .iCloud
                     isConnected = true
+                    lastFetchSucceeded = true
+                    lastFetchDate = Date()
                     saveToSharedContainer(newPayload)
                     return
                 }
@@ -133,6 +139,7 @@ final class PhonePayloadStore {
             if payload == nil {
                 lastError = String(localized: "No data source available")
             }
+            lastFetchSucceeded = false
             isConnected = false
             return
         }
@@ -141,11 +148,14 @@ final class PhonePayloadStore {
             payload = newPayload
             source = .localNetwork
             isConnected = true
+            lastFetchSucceeded = true
+            lastFetchDate = Date()
             saveToSharedContainer(newPayload)
         } catch {
             if payload == nil {
                 lastError = error.localizedDescription
             }
+            lastFetchSucceeded = false
             isConnected = false
         }
     }

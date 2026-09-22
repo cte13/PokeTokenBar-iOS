@@ -14,6 +14,7 @@ struct PokeTokenBarWidget: Widget {
         .configurationDisplayName("PokeTokenBar")
         .description("Your AI token usage at a glance.")
         .supportedFamilies([
+            .systemSmall,
             .systemMedium,
             .accessoryRectangular,
             .accessoryCircular,
@@ -42,7 +43,10 @@ struct WidgetTimelineProvider: TimelineProvider {
         Task.detached(priority: .utility) {
             guard let ck = try? await CloudKitSync.fetch() else { return }
             WidgetTimelineProvider.persistPayload(ck)
-            WidgetCenter.shared.reloadAllTimelines()
+            // Don't call reloadAllTimelines() here — it re-enters getTimeline()
+            // and creates an infinite loop. The .after(nextUpdate) policy above
+            // already schedules the next refresh, and the main app triggers
+            // reloads when it saves fresh data via PhonePayloadStore.
         }
     }
 
@@ -81,6 +85,12 @@ struct PokeTokenBarWidgetEntryView: View {
             accessoryCircularView(entry.payload)
         case .accessoryInline:
             accessoryInlineView(entry.payload)
+        case .systemSmall:
+            if let payload = entry.payload {
+                smallView(payload)
+            } else {
+                emptyView
+            }
         default:
             if let payload = entry.payload {
                 mediumView(payload)
@@ -217,6 +227,53 @@ struct PokeTokenBarWidgetEntryView: View {
         } else {
             Text("PokeTokenBar")
         }
+    }
+
+    // MARK: - Small Widget
+
+    private func smallView(_ payload: PhonePayload) -> some View {
+        VStack(spacing: 6) {
+            if let companion = payload.companion {
+                spriteImage(companion: companion)
+                    .frame(width: 56, height: 56)
+
+                HStack(spacing: 2) {
+                    Text(companion.isEgg ? String(localized: "Egg") : companion.name)
+                        .font(.caption.bold())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if !companion.isEgg,
+                       companion.representativeSpeciesID != nil
+                           ? (companion.representativeIsShiny ?? false) : companion.isShiny {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.yellow)
+                    }
+                }
+
+                let progress = companion.isEgg ? companion.eggProgress : companion.progress
+                ProgressView(value: min(1, max(0, progress)))
+                    .tint(companion.isEgg ? .orange : .blue)
+                    .scaleEffect(x: 1, y: 0.6, anchor: .center)
+                    .padding(.horizontal, 8)
+            } else {
+                Image(systemName: "gamecontroller")
+                    .font(.title)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(TokenFormatter.compact(payload.todayTokens))
+                .font(.title3.monospacedDigit().bold())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            if payload.todayCost > 0 {
+                Text(TokenFormatter.costCompact(payload.todayCost))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Medium Widget
@@ -366,13 +423,12 @@ struct PokeTokenBarWidgetEntryView: View {
         if text.hasPrefix("Antigravity ") {
             text = "AGY " + text.dropFirst("Antigravity ".count)
         }
-        text = text.replacingOccurrences(of: "Claude & GPT", with: "Claude")
-            .replacingOccurrences(of: "Claude y GPT", with: "Claude")
-            .replacingOccurrences(of: "Claude et GPT", with: "Claude")
-            .replacingOccurrences(of: "Claude e GPT", with: "Claude")
-            .replacingOccurrences(of: "Claude- & GPT-Modelle", with: "Claude")
-            .replacingOccurrences(of: "Claude & GPT 모델군", with: "Claude")
-            .replacingOccurrences(of: "Claude & GPT モデル群", with: "Claude")
+        // Locale-independent: any label containing "Claude" followed eventually by "GPT" is a
+        // combined bucket (e.g. "Claude & GPT", "Claude y GPT", "Claude- & GPT-Modelle", etc.).
+        // Collapse to just "Claude" so the window suffix (5h / weekly) isn't truncated.
+        if let range = text.range(of: #"Claude\S*\s.*GPT\S*"#, options: .regularExpression) {
+            text = text.replacingCharacters(in: range, with: "Claude")
+        }
 
         let effectiveGroup = (group == "Antigravity") ? "AGY" : group
 
@@ -545,6 +601,19 @@ struct PokeTokenBarWidgetEntryView: View {
             PhoneProviderSnapshot(id: "claude_code", displayName: "Claude", todayTokens: 1_000_000, todayCost: 10.0),
             PhoneProviderSnapshot(id: "codex", displayName: "Codex", todayTokens: 500_000, todayCost: 2.34),
         ]))
+}
+
+#Preview("Small", as: .systemSmall) {
+    PokeTokenBarWidget()
+} timeline: {
+    WidgetEntry(date: Date(), payload: PhonePayload(
+        todayTokens: 1_500_000, todayCost: 12.34, weekTokens: 10_000_000,
+        monthTokens: 40_000_000, lastUpdated: Date(), serverVersion: "1.0",
+        limits: nil,
+        companion: PhoneCompanionState(name: "Pikachu", speciesID: 25, isShiny: true, isEgg: false,
+                                        progress: 0.42, stageText: "Stage 1/3", rarity: "rare",
+                                        dexCount: 12, eggProgress: 0, displayState: "working"),
+        providers: []))
 }
 
 /// A limit window paired with its display title (group-prefixed).

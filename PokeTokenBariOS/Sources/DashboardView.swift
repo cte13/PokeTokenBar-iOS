@@ -40,7 +40,7 @@ struct DashboardView: View {
     private func dashboardContent(_ payload: PhonePayload) -> some View {
         ScrollView {
             VStack(spacing: 16) {
-                SourceIndicator(source: store.source, connected: store.isConnected, lastUpdated: payload.lastUpdated)
+                SourceIndicator(source: store.source, connected: store.isConnected, lastUpdated: payload.lastUpdated, lastFetchSucceeded: store.lastFetchSucceeded)
 
                 if let companion = payload.companion {
                     CompanionCard(companion: companion)
@@ -112,23 +112,36 @@ struct SourceIndicator: View {
     let source: PhonePayloadStore.Source?
     let connected: Bool
     let lastUpdated: Date
+    /// Whether the most recent fetch() call succeeded. nil before first attempt.
+    var lastFetchSucceeded: Bool? = nil
 
     private var isStale: Bool { Date().timeIntervalSince(lastUpdated) > 30 * 60 }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: source == .localNetwork ? "wifi" : "icloud")
-                .font(.caption2)
-                .foregroundStyle(connected && !isStale ? Color.green : (isStale ? Color.orange : Color.red))
-            Text(sourceLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("·")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Text("updated \(lastUpdated, style: .relative) ago")
-                .font(.caption)
-                .foregroundStyle(isStale ? .orange : .secondary)
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: source == .localNetwork ? "wifi" : "icloud")
+                    .font(.caption2)
+                    .foregroundStyle(connected && !isStale ? Color.green : (isStale ? Color.orange : Color.red))
+                Text(sourceLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text("updated \(lastUpdated, style: .relative) ago")
+                    .font(.caption)
+                    .foregroundStyle(isStale ? .orange : .secondary)
+            }
+            if lastFetchSucceeded == false, isStale {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.caption2)
+                    Text("Couldn't refresh — showing cached data")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -151,6 +164,7 @@ struct CompanionCard: View {
             if companion.isEgg {
                 Text("🥚")
                     .font(.system(size: 64))
+                    .accessibilityLabel("Token egg, \(Int(companion.eggProgress * 100)) percent hatched")
                 Text("Token Egg")
                     .font(.title2.bold())
                 ProgressView(value: companion.eggProgress)
@@ -169,6 +183,7 @@ struct CompanionCard: View {
                     if companion.isShiny {
                         Image(systemName: "star.fill")
                             .foregroundStyle(.yellow)
+                            .accessibilityLabel("Shiny")
                     }
                 }
 
@@ -209,6 +224,7 @@ struct CompanionCard: View {
                     .multilineTextAlignment(.center)
             }
         }
+        .accessibilityElement(children: .combine)
         .padding()
         .frame(maxWidth: .infinity)
         .background(.ultraThinMaterial)
@@ -338,6 +354,8 @@ struct UsageCard: View {
             Text(value)
                 .font(.body.monospacedDigit().bold())
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(cost != nil ? "\(title), \(value) tokens, \(cost!)" : "\(title), \(value) tokens")
         .padding(.vertical, 10)
     }
 
@@ -491,6 +509,7 @@ struct LimitHistoryCard: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .combine)
     }
 
     /// Oldest window on the left. A 0% window still gets a sliver so its slot reads as "this window
@@ -543,8 +562,10 @@ struct LimitRow: View {
                         .animation(.easeInOut(duration: 0.3), value: window.utilization)
                 }
             }
+            .accessibilityHidden(true)
             .frame(height: 8)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var utilizationColor: Color {
@@ -628,12 +649,14 @@ struct ProviderDetailCard: View {
                     }
                 }
             }
+            .accessibilityHidden(true)
             .frame(height: 6)
             Text(TokenFormatter.compact(value))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 50, alignment: .trailing)
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

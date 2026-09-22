@@ -125,6 +125,7 @@ struct PokeTokenBarWidgetEntryView: View {
             HStack(alignment: .center, spacing: 6) {
                 spriteImage(companion: companion, eggFontSize: 26)
                     .frame(width: 32, height: 32)
+                    .widgetAccentable()
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
@@ -132,6 +133,7 @@ struct PokeTokenBarWidgetEntryView: View {
                             .font(.system(size: 13, weight: .bold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
+                            .widgetAccentable()
                         if isShiny && !companion.isEgg {
                             Image(systemName: "sparkles")
                                 .font(.system(size: 8))
@@ -141,6 +143,7 @@ struct PokeTokenBarWidgetEntryView: View {
                             .font(.system(size: 13, weight: .bold).monospacedDigit())
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
+                            .widgetAccentable()
                     }
 
                     ProgressView(value: min(1, max(0, progress)))
@@ -206,12 +209,14 @@ struct PokeTokenBarWidgetEntryView: View {
                         .resizable()
                         .interpolation(.none)
                         .frame(width: 22, height: 22)
+                        .widgetAccentable()
                 } else {
                     Text(companion.isEgg ? "🥚" : "👾")
                         .font(.system(size: 14))
                 }
             }
             .gaugeStyle(.accessoryCircular)
+            .widgetAccentable()
         } else {
             Image(systemName: "gamecontroller")
                 .font(.title3)

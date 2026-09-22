@@ -42,11 +42,21 @@ struct DashboardView: View {
             VStack(spacing: 16) {
                 SourceIndicator(source: store.source, connected: store.isConnected, lastUpdated: payload.lastUpdated, lastFetchSucceeded: store.lastFetchSucceeded)
 
+                if let incidents = payload.incidents, !incidents.isEmpty {
+                    ForEach(incidents) { incident in
+                        IncidentBanner(incident: incident)
+                    }
+                }
+
                 if let companion = payload.companion {
                     CompanionCard(companion: companion)
                 }
 
                 UsageCard(payload: payload)
+
+                if let trend = payload.dailyTrend, trend.contains(where: { $0.totalTokens > 0 }) {
+                    DailyTrendCard(days: trend)
+                }
 
                 if let limits = payload.limits {
                     LimitsCard(limits: limits, isProviderVisible: { store.isProviderVisible($0) })
@@ -560,12 +570,28 @@ struct LimitRow: View {
                         .fill(utilizationColor)
                         .frame(width: geo.size.width * min(1, window.utilization / 100), height: 8)
                         .animation(.easeInOut(duration: 0.3), value: window.utilization)
+                    if let pace = paceFraction {
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(.primary.opacity(0.65))
+                            .frame(width: 2.5, height: 12)
+                            .offset(x: (geo.size.width - 2.5) * pace, y: -2)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             .accessibilityHidden(true)
             .frame(height: 8)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var paceFraction: Double? {
+        guard let resetsAt = window.resetsAt,
+              let span = window.windowDuration,
+              span > 0 else { return nil }
+        let fraction = (span - resetsAt.timeIntervalSince(Date())) / span
+        guard fraction.isFinite, (0...1).contains(fraction) else { return nil }
+        return fraction
     }
 
     private var utilizationColor: Color {
@@ -734,5 +760,139 @@ struct SetupView: View {
                 .padding(.horizontal, 32)
         }
         .navigationTitle("Setup")
+    }
+}
+
+// MARK: - Daily Trend Card
+
+struct DailyTrendCard: View {
+    let days: [PhoneDailyTrend]
+
+    private var peak: Int { days.map(\.totalTokens).max() ?? 0 }
+    private var todayDate: String {
+        days.first(where: \.isToday)?.date ?? days.last?.date ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Daily Trend")
+                    .font(.headline)
+                Spacer()
+                if peak > 0 {
+                    Text("Peak \(TokenFormatter.compact(peak))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Bars
+            HStack(alignment: .bottom, spacing: 1.5) {
+                ForEach(days) { day in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(barColor(day))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: barHeight(day.totalTokens))
+                        .accessibilityLabel(Text("\(day.date): \(TokenFormatter.compact(day.totalTokens)) tokens"))
+                }
+            }
+            .frame(height: 26, alignment: .bottom)
+
+            // Weekend ticks
+            HStack(spacing: 1.5) {
+                ForEach(days) { day in
+                    RoundedRectangle(cornerRadius: 0.5)
+                        .fill(isWeekend(day.date) ? Color.secondary.opacity(0.3) : .clear)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 1.5)
+                }
+            }
+
+            // Axis labels
+            HStack(spacing: 1.5) {
+                ForEach(days) { day in
+                    Group {
+                        if let label = axisLabel(for: day.date) {
+                            Text(label)
+                                .font(.system(size: 9).monospacedDigit())
+                                .foregroundStyle(day.date == todayDate ? Color.accentColor : Color.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        } else {
+                            Color.clear.frame(height: 1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func barColor(_ day: PhoneDailyTrend) -> Color {
+        if day.isToday { return .accentColor }
+        if day.totalTokens == 0 { return .secondary.opacity(0.18) }
+        return .secondary.opacity(0.45)
+    }
+
+    private func barHeight(_ tokens: Int) -> CGFloat {
+        guard peak > 0, tokens > 0 else { return 1.5 }
+        let ratio = min(1, Double(tokens) / Double(peak))
+        return max(1.5, CGFloat(ratio) * 26)
+    }
+
+    private func isWeekend(_ dateString: String) -> Bool {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        guard let date = f.date(from: dateString) else { return false }
+        return Calendar.current.isDateInWeekend(date)
+    }
+
+    private func axisLabel(for date: String) -> String? {
+        guard let dayOfMonth = Int(date.suffix(2)) else { return nil }
+        if date == todayDate { return "\(dayOfMonth)" }
+        let isRegular = dayOfMonth == 1 || dayOfMonth % 7 == 0
+        guard isRegular else { return nil }
+        if let todayOfMonth = Int(todayDate.suffix(2)),
+           abs(dayOfMonth - todayOfMonth) < 3 { return nil }
+        return "\(dayOfMonth)"
+    }
+}
+
+// MARK: - Incident Banner
+
+struct IncidentBanner: View {
+    let incident: PhoneIncident
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(incident.statusLabel)
+                    .font(.caption.weight(.semibold))
+                Text(incident.componentName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(dotColor.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var dotColor: Color {
+        switch incident.severity {
+        case "critical": return .red
+        case "major": return .orange
+        case "minor", "maintenance": return .yellow
+        default: return .secondary
+        }
     }
 }

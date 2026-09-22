@@ -28,6 +28,12 @@ public struct PhonePayload: Codable, Sendable, Equatable {
     public let burn: PhoneBurnForecast?
     /// Catch log — individual caught mon records (read-only mirror of Mac catch log).
     public let catchLog: [PhoneDexEntry]
+    /// Day-by-day token totals and costs for the current month (oldest first).
+    /// nil from Macs that predate the field.
+    public let dailyTrend: [PhoneDailyTrend]?
+    /// Active service incidents from statuspage.io, keyed by provider ID.
+    /// nil from Macs that predate the field.
+    public let incidents: [PhoneIncident]?
 
     public init(todayTokens: Int, todayCost: Double, weekTokens: Int, monthTokens: Int,
                 lastUpdated: Date, serverVersion: String, limits: PhoneLimitStatus?,
@@ -36,7 +42,9 @@ public struct PhonePayload: Codable, Sendable, Equatable {
                 spendableTokens: Int = 0, shop: [PhoneShopEntry] = [],
                 weekCost: Double? = nil, monthCost: Double? = nil,
                 burn: PhoneBurnForecast? = nil,
-                catchLog: [PhoneDexEntry] = []) {
+                catchLog: [PhoneDexEntry] = [],
+                dailyTrend: [PhoneDailyTrend]? = nil,
+                incidents: [PhoneIncident]? = nil) {
         self.todayTokens = todayTokens
         self.todayCost = todayCost
         self.weekTokens = weekTokens
@@ -54,6 +62,8 @@ public struct PhonePayload: Codable, Sendable, Equatable {
         self.monthCost = monthCost
         self.burn = burn
         self.catchLog = catchLog
+        self.dailyTrend = dailyTrend
+        self.incidents = incidents
     }
 
     /// Older Mac versions publish payloads without `bag`/`dex`/`shop`/`catchLog` — decode them
@@ -77,6 +87,8 @@ public struct PhonePayload: Codable, Sendable, Equatable {
         monthCost = try c.decodeIfPresent(Double.self, forKey: .monthCost)
         burn = try c.decodeIfPresent(PhoneBurnForecast.self, forKey: .burn)
         catchLog = try c.decodeIfPresent([PhoneDexEntry].self, forKey: .catchLog) ?? []
+        dailyTrend = try c.decodeIfPresent([PhoneDailyTrend].self, forKey: .dailyTrend)
+        incidents = try c.decodeIfPresent([PhoneIncident].self, forKey: .incidents)
     }
 }
 
@@ -234,11 +246,23 @@ public struct PhoneLimitWindow: Codable, Sendable, Equatable {
     public let label: String
     public let utilization: Double
     public let resetsAt: Date?
+    /// Window duration in seconds (e.g. 18000 for 5h, 604800 for 7d). nil when unknown.
+    /// Used by the phone to compute the pace marker position.
+    public let windowDuration: TimeInterval?
 
-    public init(label: String, utilization: Double, resetsAt: Date?) {
+    public init(label: String, utilization: Double, resetsAt: Date?, windowDuration: TimeInterval? = nil) {
         self.label = label
         self.utilization = utilization
         self.resetsAt = resetsAt
+        self.windowDuration = windowDuration
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decode(String.self, forKey: .label)
+        utilization = try c.decode(Double.self, forKey: .utilization)
+        resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        windowDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .windowDuration)
     }
 }
 
@@ -699,5 +723,58 @@ public struct PhoneShopEntry: Codable, Sendable, Equatable, Identifiable {
         self.iconName = iconName
         self.fallbackEmoji = fallbackEmoji
         self.lockedReason = lockedReason
+    }
+}
+
+// MARK: - Daily Trend
+
+/// One calendar day in the current month's usage trend (aggregated across all providers).
+public struct PhoneDailyTrend: Codable, Sendable, Equatable, Identifiable {
+    /// "yyyy-MM-dd" date key.
+    public let date: String
+    public let totalTokens: Int
+    public let totalCost: Double
+    /// Whether this is today's entry (useful for highlighting).
+    public let isToday: Bool
+
+    public var id: String { date }
+
+    public init(date: String, totalTokens: Int, totalCost: Double, isToday: Bool = false) {
+        self.date = date
+        self.totalTokens = totalTokens
+        self.totalCost = totalCost
+        self.isToday = isToday
+    }
+}
+
+// MARK: - Incident Status
+
+/// Active service incident for a provider, mirroring the Mac's statuspage.io check.
+public struct PhoneIncident: Codable, Sendable, Equatable, Identifiable {
+    /// Provider ID (e.g. "claude_code", "codex").
+    public let providerID: String
+    /// Severity: "minor", "major", "critical", "maintenance".
+    public let severity: String
+    /// Human-readable status description (e.g. "Degraded Performance").
+    public let statusLabel: String
+    /// Component name from statuspage (e.g. "Claude Code", "Codex API").
+    public let componentName: String
+
+    public var id: String { providerID }
+
+    public init(providerID: String, severity: String, statusLabel: String, componentName: String) {
+        self.providerID = providerID
+        self.severity = severity
+        self.statusLabel = statusLabel
+        self.componentName = componentName
+    }
+
+    public var severityColor: String {
+        switch severity {
+        case "critical": return "red"
+        case "major": return "orange"
+        case "minor", "maintenance": return "yellow"
+        default: return "gray"
+        }
     }
 }

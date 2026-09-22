@@ -367,6 +367,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let catchLog = companion.dexEntriesSorted.map { entry in
             Self.phoneDexEntry(entry, companion: companion)
         }
+        let todayKey = Self.todayDateKey()
+        let dailyTrend: [PhoneDailyTrend] = store.monthDailyTotals.map { day in
+            PhoneDailyTrend(date: day.date, totalTokens: day.totalTokens,
+                            totalCost: day.totalCost, isToday: day.date == todayKey)
+        }
+        let incidents: [PhoneIncident] = store.statuses.compactMap { (providerID, status) in
+            guard status.indicator.hasIssue else { return nil }
+            let severity: String
+            switch status.indicator {
+            case .critical: severity = "critical"
+            case .major: severity = "major"
+            case .minor: severity = "minor"
+            case .maintenance: severity = "maintenance"
+            default: severity = "unknown"
+            }
+            return PhoneIncident(providerID: providerID, severity: severity,
+                                 statusLabel: status.indicator.rawValue.replacingOccurrences(of: "_", with: " ").capitalized,
+                                 componentName: status.description)
+        }
         let payload = PhonePayload(
             todayTokens: store.todayTotalTokens,
             todayCost: store.todayCostTotal,
@@ -385,7 +404,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             monthCost: store.monthCostTotal,
             burn: Self.phoneBurnForecast(forecast: store.fiveHourForecast,
                                          tokensPerMinute: store.combinedBurnPerMinuteForPhone),
-            catchLog: catchLog)
+            catchLog: catchLog,
+            dailyTrend: dailyTrend.isEmpty ? nil : dailyTrend,
+            incidents: incidents.isEmpty ? nil : incidents)
         for sp in companion.dexSpecies where companion.pokemonDetailsByID[sp.id] == nil {
             Task { [weak companion] in
                 await companion?.loadPokemonDetails(speciesID: sp.id)
@@ -424,7 +445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 : (group.displayName.localizedCaseInsensitiveContains("claude") ? l.phoneAntigravityThirdPartyGroup : group.displayName)
             return group.buckets.map { bucket in
                 PhoneLimitWindow(label: l.phoneAntigravity(group: title, window: bucket.window, bucketId: bucket.bucketId),
-                                 utilization: bucket.usedPercent, resetsAt: bucket.resetDate)
+                                 utilization: bucket.usedPercent, resetsAt: bucket.resetDate,
+                                 windowDuration: bucket.is5HourWindow ? 5 * 3600 : (bucket.isWeeklyWindow ? 7 * 24 * 3600 : nil))
             }
         }
         let scoped: [PhoneLimitWindow] = (limits?.scopedLimitEntries ?? []).compactMap { entry in
@@ -432,41 +454,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return PhoneLimitWindow(
                 label: l.phoneClaudeScoped(model: entry.scope?.model?.displayName),
                 utilization: percent,
-                resetsAt: entry.resetsAt.flatMap { ISO8601Parser.date(from: $0) })
+                resetsAt: entry.resetsAt.flatMap { ISO8601Parser.date(from: $0) },
+                windowDuration: 7 * 24 * 3600)
         }
         return PhoneLimitStatus(
             claude5h: limits?.fiveHour?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaude5h, utilization: $0, resetsAt: limits?.fiveHour?.resetDate)
+                PhoneLimitWindow(label: l.phoneClaude5h, utilization: $0, resetsAt: limits?.fiveHour?.resetDate, windowDuration: 5 * 3600)
             },
             claudeWeekly: limits?.sevenDay?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeWeekly, utilization: $0, resetsAt: limits?.sevenDay?.resetDate)
+                PhoneLimitWindow(label: l.phoneClaudeWeekly, utilization: $0, resetsAt: limits?.sevenDay?.resetDate, windowDuration: 7 * 24 * 3600)
             },
             claudeOpusWeekly: limits?.sevenDayOpus?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeOpusWeekly, utilization: $0, resetsAt: limits?.sevenDayOpus?.resetDate)
+                PhoneLimitWindow(label: l.phoneClaudeOpusWeekly, utilization: $0, resetsAt: limits?.sevenDayOpus?.resetDate, windowDuration: 7 * 24 * 3600)
             },
             claudeSonnetWeekly: limits?.sevenDaySonnet?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeSonnetWeekly, utilization: $0, resetsAt: limits?.sevenDaySonnet?.resetDate)
+                PhoneLimitWindow(label: l.phoneClaudeSonnetWeekly, utilization: $0, resetsAt: limits?.sevenDaySonnet?.resetDate, windowDuration: 7 * 24 * 3600)
             },
             claudeScoped: scoped.isEmpty ? nil : scoped,
             codexPrimary: codex?.maxPrimaryUsedPercent.map {
-                PhoneLimitWindow(label: l.phoneCodex, utilization: Double($0), resetsAt: codexPrimaryWindow?.resetDate)
+                PhoneLimitWindow(label: l.phoneCodex, utilization: Double($0), resetsAt: codexPrimaryWindow?.resetDate,
+                                 windowDuration: codexPrimaryWindow?.windowDurationMins.map { TimeInterval($0) * 60 })
             },
             codexSecondary: codex?.maxSecondaryUsedPercent.map {
-                PhoneLimitWindow(label: l.phoneCodexSecondary, utilization: Double($0), resetsAt: codexSecondaryWindow?.resetDate)
+                PhoneLimitWindow(label: l.phoneCodexSecondary, utilization: Double($0), resetsAt: codexSecondaryWindow?.resetDate,
+                                 windowDuration: codexSecondaryWindow?.windowDurationMins.map { TimeInterval($0) * 60 })
             },
             opencodeGo5h: opencodeGo?.rolling.flatMap { window in
                 window.utilization.map {
-                    PhoneLimitWindow(label: l.phoneGo5h, utilization: $0, resetsAt: window.resetDate)
+                    PhoneLimitWindow(label: l.phoneGo5h, utilization: $0, resetsAt: window.resetDate, windowDuration: 5 * 3600)
                 }
             },
             opencodeGoWeekly: opencodeGo?.weekly.flatMap { window in
                 window.utilization.map {
-                    PhoneLimitWindow(label: l.phoneGoWeekly, utilization: $0, resetsAt: window.resetDate)
+                    PhoneLimitWindow(label: l.phoneGoWeekly, utilization: $0, resetsAt: window.resetDate, windowDuration: 7 * 24 * 3600)
                 }
             },
             opencodeGoMonthly: opencodeGo?.monthly.flatMap { window in
                 window.utilization.map {
-                    PhoneLimitWindow(label: l.phoneGoMonthly, utilization: $0, resetsAt: window.resetDate)
+                    PhoneLimitWindow(label: l.phoneGoMonthly, utilization: $0, resetsAt: window.resetDate, windowDuration: 30 * 24 * 3600)
                 }
             },
             antigravity: agy.isEmpty ? nil : agy,
@@ -474,6 +499,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             warnThreshold: warnThreshold,
             critThreshold: critThreshold,
             history: (history?.isEmpty ?? true) ? nil : history)
+    }
+
+    private static func todayDateKey() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        return f.string(from: Date())
     }
 
     /// 로컬에 기록한 한도 이력 → 폰. 한도 endpoint 는 현재 스냅샷만 주므로 이력은 Mac 이

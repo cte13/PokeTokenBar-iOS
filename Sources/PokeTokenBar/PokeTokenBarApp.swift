@@ -417,7 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             phoneServer.updatePayload(data)
         }
         Task { @MainActor in
-            do { try await CloudKitSync.save(payload) }
+            do { try await CloudSyncGate.save(payload) }
             catch { AppLog.write("CloudKit sync failed: \(error)") }
         }
     }

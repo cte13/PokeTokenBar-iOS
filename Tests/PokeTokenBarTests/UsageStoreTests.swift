@@ -1765,6 +1765,21 @@ final class UsageStoreTests: XCTestCase {
                        "Cursor-only must not render $0.00 / $0.0 in the menu bar")
     }
 
+    // MARK: iCloud 게이트 배선 (회귀)
+
+    /// [회귀] 폰 서버 끄기(true → false)는 iCloud 레코드 삭제를 부른다 — 그 경로도 `CloudSyncGate` 를
+    /// 지나야 한다. 테스트 러너엔 iCloud 자격증명이 없어, 게이트 없이 `CloudKitSync.delete()` 에 닿으면
+    /// `CKContainer(identifier:)` 가 SIGTRAP 으로 테스트 실행 전체를 죽인다(자격증명 없는 빌드의 크래시와 같은 조건).
+    func testTurningPhoneServerOffDoesNotTrapWithoutICloudEntitlement() async throws {
+        let claude = FakeUsageProvider(id: "claude_code", displayName: "Claude Code", daily: todayDaily(1_000))
+        let store = makeStore(providers: [claude])
+        store.phoneServerEnabled = true
+        store.phoneServerEnabled = false
+        // didSet 이 띄운 삭제 Task 가 돌 시간을 준다.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(store.phoneServerEnabled)
+    }
+
     // MARK: 디스플레이 슬립 폴링 (회귀)
 
     /// [회귀] 화면이 꺼져도 폴링은 **멈추지 않고 늦춰질 뿐**이어야 한다.

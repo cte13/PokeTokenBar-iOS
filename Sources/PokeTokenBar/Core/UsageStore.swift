@@ -185,7 +185,7 @@ final class UsageStore {
         didSet {
             defaults.set(phoneServerEnabled, forKey: "phoneServerEnabled")
             if !phoneServerEnabled {
-                Task { try? await CloudKitSync.delete() }
+                Task { try? await CloudSyncGate.delete() }
             }
         }
     }

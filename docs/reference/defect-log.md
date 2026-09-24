@@ -435,6 +435,16 @@ read_when:
   (자동 서명, entitlements 포함) 산출물로 대체한다 — 실행 절차는 `dev-deploy.md`. **릴리스 빚**:
   `release.sh`가 이 스크립트로 배포하므로 CloudKit 시대 릴리스가 나가면 전 사용자 크래시 루프가
   된다. 다음 릴리스 전에 entitlements 서명 추가 필수.
+  **이후(2026-09-25): 크래시 → 조용한 비활성으로 바뀜.** Mac 의 CloudKit 진입점(`save`·`delete`)은
+  모두 `CloudSyncGate` 를 거치고, 게이트는 실행 중인 프로세스의 서명(`SecTaskCopyValueForEntitlement`)에
+  iCloud container 가 없으면 `CloudKitSync` 에 닿지 않고 돌아온다(번들 실행이면 로그 1줄:
+  `CloudKit sync disabled: process lacks the iCloud entitlement`). `AppEnv.isBundledApp` 게이트로는
+  안 된다 — build-app.sh 산출물도 번들이다. 테스트가 못 거른 이유: 테스트 러너도 자격증명이 없어
+  CloudKit 경로에 닿는 테스트는 스위트 전체를 죽이므로, 그 경로엔 테스트가 *구조적으로* 없었다.
+  지금은 그 성질을 역이용한다 — `CloudSyncGateTests`·`UsageStoreTests.testTurningPhoneServerOff…` 는
+  러너에서 게이트를 지나 호출하므로, 게이트를 빼거나 Mac 코드가 `CloudKitSync.*` 를 직접 부르면 스위트가
+  signal 5 로 죽는다(주입 확인함). **릴리스 빚은 그대로이고 더 조용해졌다**: 자격증명 없는 릴리스는
+  이제 크래시 대신 *동기화만 조용히 잃는다* — 폰의 "Updated N ago"가 멈추는 것 말고는 신호가 없다.
 - **에너지 절약 게이트는 화면 뒤의 사람만 고려한다 — 소비자가 기기 밖에 생기면 그 전제가 죽는다.**
   `UsageStore` 는 `screensDidSleepNotification` 에 폴링 타이머를 invalidate 했다(ccusage 서브프로세스
   spawn 절약). 화면이 유일한 소비자일 땐 옳았지만, iCloud 페이로드가 **refresh 완료 훅에서만** 나가면서

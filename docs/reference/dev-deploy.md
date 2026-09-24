@@ -20,7 +20,10 @@ Mac 을 먼저 올리고 폰을 나중에 올린다.
 `CKContainer(identifier:)` 초기화가 SIGTRAP 으로 프로세스를 죽인다(2026-08-20 실측). launchd
 KeepAlive 에이전트가 이를 계속 재실행하므로 **~8초 주기 크래시 루프**가 된다 — 루프의 잠깐
 사이에 폰 서버(HTTP)가 살아 있어 "서버는 되는데 iCloud만 죽는다"로 오진하기 쉽다
-(defect-log 동일 항목 참조). 개발 설치는 항상 Xcode 프로젝트 빌드:
+(defect-log 동일 항목 참조). 2026-09-25 부터는 `CloudSyncGate` 가 자격증명 없는 프로세스에서
+CloudKit 을 건너뛰므로 크래시 대신 **iCloud 동기화만 꺼진다** — 로우 `swift build` 바이너리
+(`.build/release/PokeTokenBar`)도 다시 실행해 볼 수 있다(동기화 없이). 폰 동기화를 확인해야 하는
+개발 설치는 여전히 Xcode 프로젝트 빌드:
 
 ```bash
 xcodebuild -project PokeTokenBar.xcodeproj -scheme PokeTokenBar \
@@ -74,7 +77,8 @@ xcrun devicectl device process launch --device <DEVICE-UUID> com.poketokenbar.io
   local-day 문자열을 기대해 UTC 보다 느린 시간대에서 실패한다. `main` 에서도 실패하는 기지
   결함 — 무시하고 진행해도 된다(수정은 별도 과제).
 - **`build-app.sh`/`release.sh` 경로의 잠복 결함.** 두 스크립트 산출물은 자격증명이 없어
-  CloudKit 시대의 릴리스가 나가면 전 사용자 크래시 루프가 된다. 다음 릴리스 전에 스크립트에
-  entitlements 서명을 추가해야 한다(릴리스 게이트와 무관하게 존재하는 빚).
+  CloudKit 시대의 릴리스가 나가면 전 사용자의 iCloud 동기화가 조용히 꺼진다(`CloudSyncGate` 이전엔
+  크래시 루프). 다음 릴리스 전에 스크립트에 entitlements 서명을 추가해야 한다(릴리스 게이트와 무관하게
+  존재하는 빚).
 - **`PokeTokenBar Local` 서명 인증서 소실 시** `security find-identity -v -p codesigning` 으로
   확인 → `./scripts/create-signing-cert.sh` 재생성 → `release.sh` 의 `EXPECTED_LEAF` 갱신.

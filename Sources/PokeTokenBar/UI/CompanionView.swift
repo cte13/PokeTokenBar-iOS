@@ -833,6 +833,7 @@ struct CollectionView: View {
                         }
                     }
                 }
+                .scrollIndicators(.never)
                 .frame(maxHeight: .infinity)
                 // 필터 토글 시 목록 최상단으로 — 이전 스크롤 위치가 새 필터 결과 밖이어도 처음부터 보이게.
                 .onChange(of: selectedRarity) {
@@ -1094,6 +1095,7 @@ private struct PokemonDetailView: View {
                 }
                 .padding(.bottom, 8)
             }
+            .scrollIndicators(.never)
         }
         .task {
             if selectedUnownForm == nil { selectedUnownForm = displayedSpecies.unownForm }

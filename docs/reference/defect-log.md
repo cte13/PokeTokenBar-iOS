@@ -1222,3 +1222,16 @@ read_when:
     반환하므로, 첫 호출 뒤에 찍으면 게이트를 없애도 창 안에 쓰기가 없어 통과한다.
     ② 읽기 게이트는 엔트리 수로 검증되지 않는다 — 사용자 blob 은 픽스처 루트 밖 절대경로 키라 결과에
     안 섞인다. 로드된 blob 수(`cachedBlobCount`) 같은 **직접 관측점**이 필요하다.
+
+- **macOS 팝오버 및 설정 화면의 모든 `ScrollView`는 `.scrollIndicators(.never)`로 스크롤 막대를 완전히 숨긴다.**
+  팝오버 콘텐츠 폭은 332pt(전체 360pt)로 극도로 좁은데, 마우스가 연결되거나 시스템의 "스크롤 막대 항상 표시"
+  설정이 활성화되면 macOS 오버레이 스크롤 막대가 콘텐츠 영역 안쪽 우측에 상시 렌더되어 우측 끝에 붙은
+  금액($), 피크 토큰치, 월별 차트 막대, 사용량 백분율(%), 설정의 토글·꺾쇠를 정면으로 가렸다(#59에서
+  홈 탭 스크롤뷰 추가 시 노출).
+  - **왜 못 걸렀나:** 가로 진화선(`CompanionView.swift:372`)에는 이미 레거시 스크롤러 높이 잠식 결함 방지를
+    위해 `.scrollIndicators(.never)`를 적용했으나, 세로 `ScrollView`들(홈/상점/가방/도감/상세/설정)에는
+    전수 적용되지 않고 누락되었다.
+  - **방어 메커니즘:** `ScrollIndicatorTests.testEveryMacOSUIScrollViewHidesScrollIndicators`가
+    `Sources/PokeTokenBar/UI` 내 모든 `ScrollView`에 `.scrollIndicators(.never)` 지정 여부를 기계적으로
+    정적 검증하여 누락 시 빌드/테스트를 차단한다.
+

@@ -148,6 +148,7 @@ struct PopoverView: View {
                         }
                     }
                 }
+                .scrollIndicators(.never)
                 .frame(height: 520)
             }
             footer
@@ -1251,7 +1252,7 @@ struct ProviderTabBar: View {
     let onSelect: (String) -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal) {
             HStack(spacing: 6) {
                 ForEach(snapshots) { snap in
                     let isSelected = snap.providerID == selectedID
@@ -1270,6 +1271,7 @@ struct ProviderTabBar: View {
                 }
             }
         }
+        .scrollIndicators(.never)
         // 탭이 적으면(대부분의 사용자) 스크롤·바운스가 생기지 않아 기존과 동일하게 보인다.
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }

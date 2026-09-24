@@ -82,6 +82,7 @@ struct SettingsView: View {
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollIndicators(.never)
                 .onAppear {
                     guard !didApplyStartExpanded else { return }
                     didApplyStartExpanded = true

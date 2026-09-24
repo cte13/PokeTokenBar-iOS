@@ -797,6 +797,17 @@ read_when:
   공용 `LimitsPollCadence` 로 합쳤다 — 한쪽만 고쳐지고 다른 쪽이 남는 게 이 부류의 재발 경로다.
 - **사용자 동작 경로는 간격을 우회하되 시도 시각은 기록한다.** 우회만 하고 기록을 빼면 누른 직후의
   자동 폴이 같은 endpoint 를 즉시 다시 호출한다.
+- **업스트림 동기화로 들어온 원격 한도 fetch 는 이 게이트를 모른다 — 동기화 때마다 전수 확인한다.**
+  업스트림 #327(Claude 다중 계정)·#273(Cursor 한도)을 머지하자, 기본 계정은 5분 게이트를 지나는데
+  추가 계정 폴더와 Cursor 는 매 스캔마다 endpoint 를 호출했다(2026-09-25 동기화). 텍스트 충돌이 없어
+  머지는 조용했고, 드러난 신호는 업스트림 테스트가 **포크의 게이트에 막혀** 실패한 것뿐이었다(연속
+  `refresh()` 가 기본 계정을 1회만 조회). 같은 동기화에서 Cursor 프로바이더는 `AppEnv.isBundledApp`
+  게이트도 없이 `swift test` 에서 사용자 Cursor 로그인으로 `api2.cursor.sh` 를 칠 수 있었는데, 그쪽은
+  `LiveCredentialCallGateTests` 소스 스캔이 잡았다. 간격 게이트엔 그런 스캔이 없다. 규칙: 동기화 후
+  `grep -n "func refresh.*Limits" UsageStore.swift` 로 원격 fetch 를 열거해 각각 `LimitsPollCadence`
+  (계정·폴더별 키)를 지나는지 확인한다. 업스트림 테스트가 "연속 폴링 = 매번 조회"를 가정하면 테스트 쪽에
+  `remoteLimitsPollInterval: 0` 을 넣는다 — 게이트를 빼지 않는다. 가드:
+  `testAutomaticPollsRespectTheCadenceForEveryFolder`·`testAutomaticCursorPollsRespectTheCadence`.
 
 ## 네트워크 서비스 노출
 

@@ -259,6 +259,14 @@ read_when:
   **와** 실제로 로그에서 읽히는 현행 식별자가 전부 가격을 갖는지
   (`testModelsReadFromProviderLogsAreAllPriced`) 를 둘 다 단언한다. 미지로 남겨 두는 단언에는
   **아직 출시되지 않은** 이름만 쓴다(`claude-opus-6`), 현행 세대 이름은 절대 쓰지 않는다.
+- **`testModelsReadFromProviderLogsAreAllPriced` 는 손으로 채우는 목록이라 *새로 등장한* 모델은 못 잡는다.**
+  `claude-opus-5-5` 가 출시돼 로그에 찍히자 그날 Claude 비용이 전부 "Unavailable" 이 됐다(2026-09-25,
+  주/월은 과거 모델분이 있어 금액이 떠서 부분 결함으로 보였다). 테이블 결함이 아니라 **감지 공백**이다 —
+  정확 매칭만 쓰는 설계(#289)상 새 모델은 행을 추가하기 전까지 반드시 미가격이고, 그걸 알려 주는 신호가
+  UI 의 "Unavailable" 뿐이었다. 이제 `Bucket.add` 가 미가격 모델을 만나면 `ModelPricing.noteUnpriced` 가
+  프로세스당 식별자별 1회 `Unpriced model: <id>` 를 로그에 남긴다. 비용이 비면 먼저
+  `grep "Unpriced model" ~/Library/Logs/PokeTokenBar.log` → 가격 페이지 확인 → 정확 행 + 위 테스트 목록에 추가.
+  스윕 시 `"model":"…[1m]"` 같은 변형은 attachment 메타데이터(usage 없음)라 가격 대상이 아니다.
 - **새 provider를 추가할 때 reader/cache만 연결하면 Settings의 custom-root contract가 조용히 빠진다.** `CustomScanRoots`는
   provider별 `curatedRoots(for:)`와 실제 reader의 `CustomScanRoots.storedValue(for:)` 조회를 모두 registry로
   취급한다. Pi 추가 때 reader/cache/provider는 등록했지만 이 두 지점을 빠뜨려 CI의

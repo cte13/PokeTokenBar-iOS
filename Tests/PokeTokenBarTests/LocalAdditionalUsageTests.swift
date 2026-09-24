@@ -130,8 +130,6 @@ final class LocalAdditionalUsageTests: XCTestCase {
     }
 
     func testHermesAcceptsMillisecondStartedAt() throws {
-        // 초 단위로 오해하면 서기 57969년이 되므로, 이 값 하나로 ms/초 판별을 검증한다.
-        let startedAtMilliseconds = 1_767_312_000_000
         let database = temporaryDirectory.appendingPathComponent("state.db")
         try execute(database, sql: """
         CREATE TABLE sessions (
@@ -141,7 +139,7 @@ final class LocalAdditionalUsageTests: XCTestCase {
             estimated_cost_usd REAL, actual_cost_usd REAL
         );
         INSERT INTO sessions VALUES (
-            'session-ms', 'gpt-5', 'openai', \(startedAtMilliseconds), 1,
+            'session-ms', 'gpt-5', 'openai', 1767312000000, 1,
             10, 5, 0, 0, 0, 0, 0
         );
         """)
@@ -149,13 +147,11 @@ final class LocalAdditionalUsageTests: XCTestCase {
         let entries = LocalAdditionalUsageReader.hermesEntries(
             modifiedSince: try date("2026-01-01T00:00:00Z"), roots: [database])
 
-        // `localDay` 는 로컬 캘린더 기준이라 기대값을 문자열로 박으면 UTC 동쪽에서만 통과한다
-        // (`2026-01-02T00:00:00Z` 는 미주에서 2026-01-01 이다). 이 테스트의 계약은 날짜 문자열이
-        // 아니라 ms/초 판별이므로, 같은 순간을 프로덕션과 **동일한 포매터**로 환산해 비교한다.
-        let expectedInstant = Date(timeIntervalSince1970: Double(startedAtMilliseconds) / 1000)
         XCTAssertEqual(entries.count, 1)
+        // The value lands exactly on midnight UTC, so a hardcoded day breaks in timezones west of UTC.
         XCTAssertEqual(entries.first?.localDay,
-                       LocalUsageReader.localDayFormatter().string(from: expectedInstant))
+                       LocalUsageReader.localDayFormatter()
+                           .string(from: Date(timeIntervalSince1970: 1_767_312_000)))
         XCTAssertEqual(entries.first?.total, 15)
     }
 

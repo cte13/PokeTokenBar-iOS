@@ -38,6 +38,8 @@ final class PopoverNavigation {
     var showingCollectionLog = false
     /// 프로바이더 탭 선택 — reset() 대상이 아님(팝오버를 다시 열어도 보던 서비스 유지).
     var providerID: String?
+    /// Claude account tab in the limits section. Kept across openings, like `providerID`.
+    var claudeAccountID: String?
     /// 설정을 열 때 고급 섹션을 펼친 채로 시작할지. 세션 키 행이 접힌 disclosure 안에 살아서,
     /// 그냥 설정만 열면 "만료됐다"를 보고 들어온 사용자가 고칠 입력란을 못 찾는다.
     var expandAdvancedOnOpen = false
@@ -314,11 +316,13 @@ struct PopoverView: View {
         // claudeLimitsRefreshRow("탭해서 로드")가 보여, 설정까지 안 들어가도 원탭으로 켤 수 있다.
         // (자동 Keychain 읽기는 팝업 방지로 여전히 안 함 — 발견성만 살린다.)
         case "claude_code": return !store.disableKeychainAccess || store.limits != nil || store.limitsAuthExpired
+            || !store.additionalLimits.isEmpty
         case "codex": return store.codexLimits?.hasVisibleLimit == true
         // OpenCode Go 구독 한도 — auth.json 의 opencode-go 키가 있을 때만 endpoint 가 200 을
         // 주므로, 로드된 한도가 있을 때만 섹션을 노출한다(zen 페이즈유고 사용자는 빈 섹션 안 뜸).
         case "opencode": return store.opencodeGoLimits?.hasVisibleLimit == true
         case "antigravity": return !store.disableKeychainAccess || store.antigravityHasTokenFile || store.antigravityLimits?.hasVisibleLimit == true || store.antigravityLimitsAuthExpired
+        case "cursor": return store.cursorLimits?.hasVisibleLimit == true || store.cursorLimitsAuthExpired
         default: return false
         }
     }
@@ -372,69 +376,14 @@ struct PopoverView: View {
                 claudeAuthExpiredNotice
             } else if selectedSnapshot?.providerID == "claude_code",
                       !store.disableKeychainAccess,
-                      store.limits == nil || store.claudeLimitsStale {
+                      store.claudeLimitsMissing || store.claudeLimitsStale || store.additionalLimitsPending
+                        || store.additionalLimitsStale {
                 // 자동 폴링은 Keychain 을 안 읽으므로(팝업 방지), 최초/만료 후 공식 한도는 이 원탭으로
                 // 사용자가 직접 갱신한다. 프롬프트가 뜨더라도 사용자 행동에 의한 것이라 예상 가능하다.
                 claudeLimitsRefreshRow
             }
-            // antigravity 와 같은 이유 — 버튼은 팝오버에 있는데 사유가 설정 화면에만 있으면 무반응으로 보인다.
-            if selectedSnapshot?.providerID == "claude_code",
-               let refreshError = store.limitTokenRefreshError {
-                Text(refreshError)
-                    .font(.caption2).foregroundStyle(.orange).lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if selectedSnapshot?.providerID == "claude_code", let limits = store.limits {
-                // 플랜(계정 속성) — Codex codexMetaRow 와 동일 스타일. 구독 정보 있을 때만 노출.
-                if let plan = limits.planDisplay {
-                    Text(l.plan(plan))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                // 계정 라벨 — 두 계정이 한 Keychain 항목을 번갈아 쓰는 기기에서 이 한도가
-                // 어느 계정 것인지 알려준다 (없으면 라벨 없이 종전과 동일).
-                if let account = limits.accountDisplay {
-                    Text(l.limitsAccount(account))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                // 세션 만료 시 표시값은 만료 전 기준 → 흐리게 처리해 "현재 값 아님"을 시각적으로 전달
-                VStack(alignment: .leading, spacing: 8) {
-                    // 레거시 필드는 이름이 곧 창 길이다 — five_hour=5h, seven_day*=7d.
-                    limitRow(name: l.fiveHourSession, window: limits.fiveHour,
-                             span: LimitWindowSpan.fiveHour)
-                    forecastRow
-                    limitRow(name: l.weekly, window: limits.sevenDay,
-                             span: LimitWindowSpan.sevenDay)
-                    limitRow(name: l.weeklyOpus, window: limits.sevenDayOpus,
-                             span: LimitWindowSpan.sevenDay)
-                    limitRow(name: l.weeklySonnet, window: limits.sevenDaySonnet,
-                             span: LimitWindowSpan.sevenDay)
-                    // 신형 limits[] — 모델별 주간(weekly_scoped) 등 레거시 필드 밖 윈도우
-                    ForEach(Array(limits.scopedLimitEntries.enumerated()), id: \.offset) { _, entry in
-                        limitRow(
-                            name: l.claudeLimitEntry(kind: entry.kind, model: entry.scope?.model?.displayName),
-                            window: LimitWindow(utilization: entry.percent, resetsAt: entry.resetsAt),
-                            span: entry.windowSpan)
-                    }
-                    // 전 프로바이더가 블록을 갖게 됨 — "Claude 현재 5h 블록" 행은 명시 조회
-                    if let block = store.snapshots.first(where: { $0.providerID == "claude_code" })?.activeBlock,
-                       let end = block.endDate {
-                        HStack {
-                            Text(l.claudeCurrentBlock)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(TokenFormatter.compact(block.totalTokens))
-                                .font(.caption)
-                                .monospacedDigit()
-                            Spacer()
-                            (Text("\(l.reset) ") + Text(end, style: .relative) + resetClockSuffix(end))
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                .opacity(store.limitsAuthExpired ? 0.5 : 1)
+            if selectedSnapshot?.providerID == "claude_code" {
+                claudeAccountsContent
             }
             if selectedSnapshot?.providerID == "codex",
                let codexStatus = store.codexLimits, codexStatus.hasVisibleLimit {
@@ -469,6 +418,9 @@ struct PopoverView: View {
             if selectedSnapshot?.providerID == "antigravity" {
                 antigravityLimitsContent
             }
+            if selectedSnapshot?.providerID == "cursor" {
+                cursorLimitsContent
+            }
         }
     }
 
@@ -492,6 +444,81 @@ struct PopoverView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var cursorLimitsContent: some View {
+        if store.cursorLimitsAuthExpired {
+            cursorAuthExpiredNotice
+        }
+        if let status = store.cursorLimits, status.hasVisibleLimit {
+            if store.cursorLimitsStale {
+                staleBadge(updatedAt: store.cursorLimitsUpdatedAt)
+            }
+            if let message = status.displayMessage, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if let usage = status.planUsage, let used = usage.usedPercent {
+                    cursorLimitRow(name: l.cursorMonthlyIncluded, utilization: used, reset: status.billingCycleEndDate)
+                    if let remaining = usage.remainingDollars {
+                        Text(l.cursorRemainingSpend(TokenFormatter.cost(remaining)))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                if let auto = status.planUsage?.autoPercentUsed {
+                    cursorLimitRow(name: l.cursorAutoUsage, utilization: auto, reset: nil)
+                }
+                if let api = status.planUsage?.apiPercentUsed {
+                    cursorLimitRow(name: l.cursorApiUsage, utilization: api, reset: nil)
+                }
+            }
+            .opacity(store.cursorLimitsAuthExpired ? 0.5 : 1)
+        }
+    }
+
+    @ViewBuilder
+    private func cursorLimitRow(name: String, utilization: Double, reset: Date?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(name)
+                    .font(.callout)
+                Spacer()
+                Text(limitPercentText(utilization))
+                    .font(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(limitColor(utilization))
+                if let reset {
+                    Text("· \(reset, style: .relative)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            ProgressView(value: min(utilization, 100), total: 100)
+                .tint(limitColor(utilization))
+                .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private var cursorAuthExpiredNotice: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(l.cursorAuthExpiredTitle)
+                    .font(.caption).fontWeight(.medium)
+            }
+            Text(l.cursorAuthExpiredHint)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
@@ -772,9 +799,11 @@ struct PopoverView: View {
     }
 
     @ViewBuilder
-    private func limitRow(name: String, window: LimitWindow?, span: TimeInterval?) -> some View {
+    private func limitRow(name: String, window: LimitWindow?, span: TimeInterval?,
+                          notStartedHint: String? = nil) -> some View {
         if let window, let utilization = window.utilization {
-            quotaRow(name: name, utilization: utilization, reset: window.resetDate, span: span)
+            quotaRow(name: name, utilization: utilization, reset: window.resetDate, span: span,
+                     idleHint: window.hasNotStarted ? notStartedHint : nil)
         }
     }
 
@@ -782,7 +811,8 @@ struct PopoverView: View {
     /// `span` 은 창 길이 — 리셋 시각과 함께 주어질 때만 페이스 눈금을 그린다. 기본 nil 이라
     /// 창 길이를 모르는 행(Codex 개인 지출 한도)은 호출을 바꾸지 않아도 눈금 없이 남는다.
     private func quotaRow(name: String, utilization: Double, reset: Date?,
-                          span: TimeInterval? = nil, detail: String? = nil) -> some View {
+                          span: TimeInterval? = nil, detail: String? = nil,
+                          idleHint: String? = nil) -> some View {
         let pace = paceFraction(reset: reset, span: span)
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
@@ -796,6 +826,10 @@ struct PopoverView: View {
                 }
                 if let reset {
                     resetLabel(reset)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else if let idleHint {
+                    Text(idleHint)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -859,6 +893,12 @@ struct PopoverView: View {
     }
 
     private var claudeAuthExpiredNotice: some View {
+        authExpiredNotice(hint: l.claudeAuthExpiredHint)
+    }
+
+    /// Expired session banner with a retry: the default account above the tabs, an additional
+    /// account inside its tab (retry reads its renewed token once Claude Code ran on that folder).
+    private func authExpiredNotice(hint: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -878,8 +918,9 @@ struct PopoverView: View {
                 .controlSize(.small)
                 .disabled(store.isRefreshingLimitToken)
             }
-            Text(l.claudeAuthExpiredHint)
+            Text(hint)
                 .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
@@ -918,29 +959,137 @@ struct PopoverView: View {
         }
     }
 
+    /// Claude official limits, one tab per account when there are several (default login first).
+    @ViewBuilder
+    private var claudeAccountsContent: some View {
+        let accounts = store.claudeAccounts
+        if accounts.count > 1 {
+            let trackedID = store.trackedClaudeAccount?.id
+            CapsuleTabBar(
+                items: accounts.map {
+                    CapsuleTabBar.Item(id: $0.id, title: $0.title, help: $0.status.accountDisplay,
+                                       marked: $0.id == trackedID)
+                },
+                selectedID: selectedClaudeAccount(in: accounts)?.id,
+                onSelect: { nav.claudeAccountID = $0 })
+        }
+        if let account = selectedClaudeAccount(in: accounts) {
+            claudeAccountLimits(account, showsUsage: accounts.count > 1)
+        }
+        // Tab totals do not add up to the header when some sessions belong to no login's history.
+        if accounts.count > 1, store.unattributedClaudeUsage.monthTokens > 0 {
+            Text(l.unattributedClaudeUsage(TokenFormatter.compact(store.unattributedClaudeUsage.monthTokens)))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func selectedClaudeAccount(in accounts: [ClaudeAccountLimits]) -> ClaudeAccountLimits? {
+        accounts.first { $0.id == nav.claudeAccountID } ?? accounts.first
+    }
+
+    @ViewBuilder
+    private func claudeAccountLimits(_ account: ClaudeAccountLimits, showsUsage: Bool) -> some View {
+        let limits = account.status
+        if account.isExpired, !account.isDefault {
+            authExpiredNotice(hint: l.additionalAccountExpiredHint(account.fallbackTitle))
+        } else if !account.isDefault, account.isStale() {
+            // The default account's stale label lives in the refresh row above the tabs.
+            staleBadge(updatedAt: account.updatedAt)
+        }
+        // 플랜(계정 속성) — Codex codexMetaRow 와 동일 스타일. 구독 정보 있을 때만 노출.
+        if let plan = limits.planDisplay {
+            Text(l.plan(plan))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        // 계정 라벨 — 두 계정이 한 Keychain 항목을 번갈아 쓰는 기기에서 이 한도가
+        // 어느 계정 것인지 알려준다 (없으면 라벨 없이 종전과 동일).
+        if let accountLabel = limits.accountDisplay {
+            Text(l.limitsAccount(accountLabel))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        // This account's share of the local usage (the header keeps the machine-wide totals).
+        if showsUsage, let usage = store.claudeAccountUsage[account.id], !usage.isEmpty {
+            HStack(spacing: 14) {
+                periodLabel(l.today, tokens: usage.todayTokens, cost: store.showsCost ? usage.todayCost : nil)
+                periodLabel(l.thisMonth, tokens: usage.monthTokens, cost: store.showsCost ? usage.monthCost : nil)
+                Spacer()
+            }
+        }
+        // 세션 만료 시 표시값은 만료 전 기준 → 흐리게 처리해 "현재 값 아님"을 시각적으로 전달
+        VStack(alignment: .leading, spacing: 8) {
+            limitRow(name: l.fiveHourSession, window: limits.fiveHour,
+                     span: LimitWindowSpan.fiveHour, notStartedHint: l.fiveHourNotStarted)
+            // The forecast follows the tracked account (it combines that account's utilization with local usage).
+            if account.id == store.trackedClaudeAccount?.id { forecastRow }
+            limitRow(name: l.weekly, window: limits.sevenDay,
+                     span: LimitWindowSpan.sevenDay)
+            limitRow(name: l.weeklyOpus, window: limits.sevenDayOpus,
+                     span: LimitWindowSpan.sevenDay)
+            limitRow(name: l.weeklySonnet, window: limits.sevenDaySonnet,
+                     span: LimitWindowSpan.sevenDay)
+            // 신형 limits[] — 모델별 주간(weekly_scoped) 등 레거시 필드 밖 윈도우
+            ForEach(Array(limits.scopedLimitEntries.enumerated()), id: \.offset) { _, entry in
+                limitRow(
+                    name: l.claudeLimitEntry(kind: entry.kind, model: entry.scope?.model?.displayName),
+                    window: LimitWindow(utilization: entry.percent, resetsAt: entry.resetsAt),
+                    span: entry.windowSpan)
+            }
+            // 전 프로바이더가 블록을 갖게 됨 — "Claude 현재 5h 블록" 행은 명시 조회
+            if let block = store.claudeCurrentBlock(for: account), let end = block.endDate {
+                HStack {
+                    Text(l.claudeCurrentBlock)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(TokenFormatter.compact(block.totalTokens))
+                        .font(.caption)
+                        .monospacedDigit()
+                    Spacer()
+                    (Text("\(l.reset) ") + Text(end, style: .relative) + resetClockSuffix(end))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .opacity(account.isExpired ? 0.5 : 1)
+    }
+
     /// 자동 폴링이 Keychain 을 안 읽는 대신 여기서 명시적 사용자 동작으로만 재취득한다.
     @ViewBuilder
     private var claudeLimitsRefreshRow: some View {
-        HStack(spacing: 6) {
-            if store.limits == nil {
-                Text(l.limitsTapToLoad)
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                (Text(l.staleLimits) + Text(" · ") + Text(store.limitsUpdatedAt ?? Date(), style: .relative))
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            Spacer()
-            Button {
-                Task { await store.refreshLimitTokenFromKeychain() }
-            } label: {
-                if store.isRefreshingLimitToken {
-                    ProgressView().controlSize(.small)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                // The row also shows for another account's pending refresh: only call the values
+                // stale when the default account's own values are.
+                if store.limits != nil, store.claudeLimitsStale {
+                    (Text(l.staleLimits) + Text(" · ") + Text(store.limitsUpdatedAt ?? Date(), style: .relative))
+                        .font(.caption).foregroundStyle(.orange)
                 } else {
-                    Text(l.refresh)
+                    Text(l.limitsTapToLoad)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button {
+                    Task { await store.refreshLimitTokenFromKeychain() }
+                } label: {
+                    if store.isRefreshingLimitToken {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(l.refresh)
+                    }
+                }
+                .controlSize(.small)
+                .disabled(store.isRefreshingLimitToken)
             }
-            .controlSize(.small)
-            .disabled(store.isRefreshingLimitToken)
+            // Without this the button looks inert when the refresh fails (e.g. rate limited):
+            // the reason was only shown in Settings.
+            if let error = store.limitTokenRefreshMessage, !store.isRefreshingLimitToken {
+                Text(error)
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1266,22 +1415,51 @@ struct ProviderTabBar: View {
     let onSelect: (String) -> Void
 
     var body: some View {
+        CapsuleTabBar(
+            items: snapshots.map { CapsuleTabBar.Item(id: $0.providerID, title: $0.displayName) },
+            selectedID: selectedID,
+            onSelect: onSelect)
+    }
+}
+
+/// Capsule tabs shared by the service tabs and the Claude account tabs (layout notes on `ProviderTabBar`).
+@MainActor
+struct CapsuleTabBar: View {
+    struct Item: Identifiable {
+        let id: String
+        let title: String
+        var help: String? = nil
+        /// A small dot before the title (the Claude account the menu bar follows).
+        var marked = false
+    }
+
+    let items: [Item]
+    let selectedID: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(snapshots) { snap in
-                    let isSelected = snap.providerID == selectedID
-                    Button { onSelect(snap.providerID) } label: {
-                        Text(snap.displayName)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .font(.caption.weight(isSelected ? .semibold : .regular))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08))
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                            .clipShape(Capsule())
+                ForEach(items) { item in
+                    let isSelected = item.id == selectedID
+                    Button { onSelect(item.id) } label: {
+                        HStack(spacing: 4) {
+                            if item.marked {
+                                Circle().frame(width: 5, height: 5)
+                            }
+                            Text(item.title)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .font(.caption.weight(isSelected ? .semibold : .regular))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .help(item.help ?? "")
                 }
             }
         }

@@ -27,6 +27,20 @@ read_when:
 
 ## 판정·데이터
 
+- **관측 공백 임계값은 창 길이에 맞춘다 — 한 창에 맞춘 상수를 모든 시리즈에 쓰지 않는다.**
+  `LimitHistoryStore.windows(from:)` 가 5시간 세션용 `maxGap = 6h` 을 주간 시리즈에도 적용해, Mac 이
+  밤마다 잠들 때마다 한 주가 흐린(truncated) 막대로 쪼개졌다 — 실측(2026-09-25) Claude 주간 샘플
+  4주치가 막대 24개로, 89% 주 뒤에 같은 주의 흐린 막대 3개가 붙어 "1 of 14 reached 80%" 가 됐다.
+  근본원인: 사용률은 창 안에서 **누적**(리셋 전까지 오르기만)이라 창 *안의* 공백은 아무것도 숨기지
+  않는다 — 재개 첫 샘플이 공백 중 사용을 이미 포함한다. 공백이 숨기는 건 그 안에 떨어진 **리셋**뿐이고,
+  그건 공백 ≥ 창 길이(확실)거나 공백 후 값이 5pp 이상 낮아졌을 때(명백)다. 이제 창 길이는 어댑터별
+  `durations`(→ `windowDurations`)로 등록하고, 공백 뒤 재개한 창은 정확하므로 흐리게 하지 않는다.
+  테스트가 못 거른 이유: 공백 테스트가 전부 5시간 형태 픽스처에 `maxGap` 하나만 넘겼고, 주간 시리즈에
+  공백을 넣은 케이스가 없었다. 회귀 가드: `testRecordedWeeklySeriesAroundAReset`(실데이터),
+  `testOvernightGapsInsideTheWeekStayOneExactWindow`, `testDropAcrossShortGapSplitsEvenWithoutHalving`
+  — 옛 6h 규칙·하락 분기 제거를 각각 주입해 실패 확인. 남은 사각: 창보다 짧은 공백이 리셋을 걸치고
+  새 창 사용이 옛 값을 넘으면 한 창으로 읽힌다(`resets_at` 은 rolling 주간에서 매 fetch 마다 움직여 키가 못 된다).
+
 - **Species ownership is not an individual's appearance.** A species-level shiny flag means
   at least one shiny was collected; using it for the selected individual's badge mislabeled
   normal catches, and earlier evolution pages offered no way to choose their normal appearance.

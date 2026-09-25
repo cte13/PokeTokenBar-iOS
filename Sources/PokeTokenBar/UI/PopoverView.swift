@@ -36,6 +36,8 @@ final class PopoverNavigation {
     var tab: PopoverTab = .home
     /// 일반적인 컬렉션 재진입에는 마지막 세그먼트를 유지하되, 대표 포켓몬 선택 진입점은 도감으로 강제한다.
     var showingCollectionLog = false
+    /// The usage recap takes over the popover like Settings does; closing the popover drops it.
+    var showingRecap = false
     /// 프로바이더 탭 선택 — reset() 대상이 아님(팝오버를 다시 열어도 보던 서비스 유지).
     var providerID: String?
     /// Claude account tab in the limits section. Kept across openings, like `providerID`.
@@ -47,6 +49,7 @@ final class PopoverNavigation {
     func reset() {
         showSettings = false
         expandAdvancedOnOpen = false
+        showingRecap = false
         tab = .home
     }
 
@@ -92,6 +95,8 @@ struct PopoverView: View {
                     .environment(store)
                     .environment(companion)
                     .environment(updater)
+            } else if nav.showingRecap {
+                RecapScreen(store: store, companion: companion) { nav.showingRecap = false }
             } else {
                 mainContent
             }
@@ -201,6 +206,12 @@ struct PopoverView: View {
                     periodLabel(l.thisWeek, tokens: store.weekTotalTokens, cost: store.showsCost ? store.weekUsageCost : nil)
                     periodLabel(l.thisMonth, tokens: store.monthTotalTokens, cost: store.showsCost ? store.monthUsageCost : nil)
                     Spacer()
+                    Button { nav.showingRecap = true } label: {
+                        Image(systemName: "chart.bar.xaxis")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(l.recapOpen)
+                    .accessibilityLabel(l.recapOpen)
                 }
                 .padding(.top, 2)
             }
@@ -793,9 +804,16 @@ struct PopoverView: View {
     }
 
     /// 툴팁 문구. 숫자도 `limitDisplayPercent` 를 거쳐 눈금 위치와 같은 방향을 말한다.
-    private func paceHelp(_ pace: Double?) -> String? {
+    /// 단계가 있으면 이름과 차이를 첫 줄에 둔다 — 행에는 색만 있으므로 글로 된 단계는 여기서 준다.
+    private func paceHelp(_ pace: Double?, tier: PaceTier?, utilization: Double) -> String? {
         guard let pace else { return nil }
-        return l.paceHint(TokenFormatter.percent(store.limitDisplayPercent(pace * 100)))
+        let hint = l.paceHint(TokenFormatter.percent(store.limitDisplayPercent(pace * 100)))
+        guard let tier else { return hint }
+        var head = l.paceTier(tier)
+        if let delta = l.paceDelta(PaceTier.roundedDelta(utilization: utilization, pace: pace)) {
+            head += " · " + delta
+        }
+        return head + "\n" + hint
     }
 
     @ViewBuilder
@@ -814,6 +832,10 @@ struct PopoverView: View {
                           span: TimeInterval? = nil, detail: String? = nil,
                           idleHint: String? = nil) -> some View {
         let pace = paceFraction(reset: reset, span: span)
+        // 페이스가 있으면 페이스 대비 단계색, 없거나 창 초반 보류 중이면 기존 절대 임계색.
+        let tier = PaceTier.tier(utilization: utilization, pace: pace, critThreshold: store.critThreshold)
+        let tint = tier?.color ?? limitColor(utilization)
+        let percentTint = tier?.percentColor ?? limitColor(utilization)
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(name).font(.callout)
@@ -836,11 +858,11 @@ struct PopoverView: View {
                 Text(limitPercentText(utilization))
                     .font(.callout)
                     .monospacedDigit()
-                    .foregroundStyle(limitColor(utilization))
+                    .foregroundStyle(percentTint)
             }
-            LimitProgressBar(usedPercent: utilization, tint: limitColor(utilization), pace: pace)
+            LimitProgressBar(usedPercent: utilization, tint: tint, pace: pace)
         }
-        .helpIfPresent(paceHelp(pace))
+        .helpIfPresent(paceHelp(pace, tier: tier, utilization: utilization))
     }
 
     @ViewBuilder
@@ -992,7 +1014,12 @@ struct PopoverView: View {
     private func claudeAccountLimits(_ account: ClaudeAccountLimits, showsUsage: Bool) -> some View {
         let limits = account.status
         if account.isExpired, !account.isDefault {
-            authExpiredNotice(hint: l.additionalAccountExpiredHint(account.fallbackTitle))
+            // A dead session key is fixed in Settings; the retry banner would only read the Keychain.
+            if account.sessionKeyExpired {
+                sessionKeyExpiredNotice
+            } else {
+                authExpiredNotice(hint: l.additionalAccountExpiredHint(account.fallbackTitle))
+            }
         } else if !account.isDefault, account.isStale() {
             // The default account's stale label lives in the refresh row above the tabs.
             staleBadge(updatedAt: account.updatedAt)
@@ -1524,4 +1551,23 @@ struct LimitProgressBar: View {
     private static let trackHeight: CGFloat = 6
     private static let markerOverhang: CGFloat = 2
     private static let markerHeight: CGFloat = trackHeight + markerOverhang * 2
+}
+
+/// 단계색은 시스템 색 — 라이트/다크에서 각각 조정된 값으로 바뀌고, 최상위(.red)는
+/// `limitColor` 의 crit 색과 같아 "crit 이면 항상 빨강"이 두 경로에서 같은 색으로 보인다.
+extension PaceTier {
+    var color: Color {
+        switch self {
+        case .wayUnder: return .blue
+        case .under: return .teal
+        case .onPace: return .green
+        case .slightlyOver: return .yellow
+        case .over: return .orange
+        case .wayOver: return .red
+        }
+    }
+
+    /// % 숫자색. 노랑 글자는 라이트 모드 배경에서 거의 안 읽혀 그 단계만 기본 글자색으로 둔다 —
+    /// 단계는 채움 색과 툴팁이 여전히 말해 준다.
+    var percentColor: Color { self == .slightlyOver ? .primary : color }
 }

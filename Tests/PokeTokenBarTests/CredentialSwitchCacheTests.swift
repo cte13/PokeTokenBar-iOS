@@ -85,6 +85,9 @@ final class CredentialSwitchCacheTests: XCTestCase {
     /// valid, so a 401 never arrives and the in-memory cache used to answer the Refresh button
     /// forever. Restoring `bypassCache: false` on that path must fail this test.
     func testManualRefreshRereadsKeychainWhenCachedTokenIsStillValid() async throws {
+        // Drives the provider's real network code against a stubbed transport (see AppEnv.allowsLiveLimitsFetch).
+        AppEnv.allowLiveFetchForTesting = true
+        defer { AppEnv.allowLiveFetchForTesting = false }
         let file = tempDir.appendingPathComponent("credentials.json")
         try writeClaudeCredentials(to: file, token: "token-account-a", subscription: "team")
         let cache = OAuthAccessTokenCache(credentialsFileURL: file)

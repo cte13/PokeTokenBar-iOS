@@ -77,6 +77,35 @@ struct L {
           "Ritmo — um consumo uniforme nesta janela estaria em \(percent) agora.",
           "Tempo – bei gleichmäßigem Verbrauch in diesem Fenster wären es jetzt \(percent).")
     }
+    /// 페이스 대비 단계 이름. paceHint 와 같은 이유로 "적정"처럼 규범적인 말은 피하고
+    /// 소진 속도만 묘사한다.
+    func paceTier(_ tier: PaceTier) -> String {
+        switch tier {
+        case .wayUnder: return t("여유 많음", "Well under pace", "かなり余裕", "Muy por debajo del ritmo", "Bien sous le rythme", "Bem abaixo do ritmo", "Deutlich unter Tempo")
+        case .under: return t("여유", "Under pace", "余裕あり", "Por debajo del ritmo", "Sous le rythme", "Abaixo do ritmo", "Unter Tempo")
+        case .onPace: return t("페이스대로", "On pace", "ペース通り", "Al ritmo", "Dans le rythme", "No ritmo", "Im Tempo")
+        case .slightlyOver: return t("조금 빠름", "Slightly fast", "やや速い", "Algo rápido", "Un peu rapide", "Um pouco rápido", "Etwas schnell")
+        case .over: return t("빠름", "Fast", "速い", "Rápido", "Rapide", "Rápido", "Schnell")
+        case .wayOver: return t("매우 빠름", "Very fast", "とても速い", "Muy rápido", "Très rapide", "Muito rápido", "Sehr schnell")
+        }
+    }
+    /// 페이스 대비 차이(%p). **쓴 양**으로 말한다 — "앞섬/위" 같은 위치 표현은 잔량 모드에서
+    /// 채움이 마커보다 짧게 그려질 때 방향이 반대로 읽힌다(#286 부류). 0 이면 문구 없음.
+    /// 유럽어는 단계 이름("Under pace")이 이미 "페이스"를 말하므로 여기선 반복하지 않는다.
+    func paceDelta(_ points: Int) -> String? {
+        if points > 0 {
+            return t("페이스보다 \(points)%p 더 씀", "\(points) pts more used", "ペースより\(points)pt多く使用",
+                     "\(points) pts más de uso", "\(points) pts de plus utilisés",
+                     "\(points) p.p. a mais de uso", "\(points) Pkt. mehr verbraucht")
+        }
+        if points < 0 {
+            let n = -points
+            return t("페이스보다 \(n)%p 덜 씀", "\(n) pts less used", "ペースより\(n)pt少なく使用",
+                     "\(n) pts menos de uso", "\(n) pts de moins utilisés",
+                     "\(n) p.p. a menos de uso", "\(n) Pkt. weniger verbraucht")
+        }
+        return nil
+    }
     var limitReached: String { t("한도 도달", "Limit reached", "上限到達", "Límite alcanzado", "Limite atteinte", "Limite atingido", "Limit erreicht") }
     var personalSpendLimit: String { t("개인 사용 한도", "Personal spend limit", "個人利用上限", "Límite de gasto personal", "Limite de dépense personnelle", "Limite de gasto pessoal", "Persönliches Ausgabenlimit") }
     var staleLimits: String { t("갱신 지연", "Stale", "更新遅延", "Desactualizado", "Périmé", "Desatualizado", "Nicht aktuell") }
@@ -193,6 +222,56 @@ struct L {
     var evolutionScrollNext: String { t("다음 진화 보기", "Show next evolutions", "次の進化を見る", "Ver evoluciones siguientes", "Voir les évolutions suivantes", "Ver próximas evoluções", "Nächste Entwicklungen anzeigen") }
 
     var back: String { t("뒤로", "Back", "戻る", "Atrás", "Retour", "Voltar", "Zurück") }
+
+    // MARK: Usage recap
+    var recapOpen: String { t("사용량 돌아보기", "Usage recap", "使用量のふりかえり", "Resumen de uso", "Récap d'utilisation", "Resumo de uso", "Nutzungsrückblick") }
+    var recapTokensUnit: String { t("토큰", "tokens", "トークン", "tokens", "tokens", "tokens", "Tokens") }
+    func recapScopeName(_ scope: RecapScope) -> String {
+        switch scope {
+        case .week: t("주간", "Week", "週", "Semana", "Semaine", "Semana", "Woche")
+        case .month: t("월간", "Month", "月", "Mes", "Mois", "Mês", "Monat")
+        case .year: t("연간", "Year", "年", "Año", "Année", "Ano", "Jahr")
+        }
+    }
+    /// Shown under a running period, whose chip compares the same number of days.
+    func recapCompareSoFar(_ scope: RecapScope) -> String {
+        switch scope {
+        case .week: t("지난주 같은 기간과 비교", "Compared with the same days last week", "先週の同じ期間と比較",
+                      "Comparado con los mismos días de la semana pasada", "Comparé aux mêmes jours de la semaine dernière",
+                      "Comparado com os mesmos dias da semana passada", "Verglichen mit denselben Tagen der Vorwoche")
+        case .month: t("지난달 같은 기간과 비교", "Compared with the same days last month", "先月の同じ期間と比較",
+                       "Comparado con los mismos días del mes pasado", "Comparé aux mêmes jours du mois dernier",
+                       "Comparado com os mesmos dias do mês passado", "Verglichen mit denselben Tagen des Vormonats")
+        case .year: t("작년 같은 기간과 비교", "Compared with the same days last year", "昨年の同じ期間と比較",
+                      "Comparado con los mismos días del año pasado", "Comparé aux mêmes jours de l'an dernier",
+                      "Comparado com os mesmos dias do ano passado", "Verglichen mit denselben Tagen des Vorjahres")
+        }
+    }
+    var recapPrevious: String { t("이전", "Previous", "前へ", "Anterior", "Précédent", "Anterior", "Vorherige") }
+    var recapNext: String { t("다음", "Next", "次へ", "Siguiente", "Suivant", "Próximo", "Nächste") }
+    var recapBestDay: String { t("최고의 날", "Best day", "最高の日", "Mejor día", "Meilleur jour", "Melhor dia", "Bester Tag") }
+    var recapActiveDays: String { t("활동한 날", "Active days", "稼働日", "Días activos", "Jours actifs", "Dias ativos", "Aktive Tage") }
+    var recapBestStreak: String { t("최장 연속", "Best streak", "最長連続", "Mejor racha", "Meilleure série", "Melhor sequência", "Beste Serie") }
+    var recapGraduates: String { t("졸업", "Graduated", "卒業", "Graduados", "Diplômés", "Formados", "Abschlüsse") }
+    var recapNoData: String { t("기록 없음", "no data", "記録なし", "sin datos", "pas de données", "sem dados", "keine Daten") }
+    func recapDays(_ count: Int) -> String {
+        t("\(count)일", "\(count)d", "\(count)日", "\(count) d", "\(count) j", "\(count) d", "\(count) T")
+    }
+    func recapBestDayLine(_ day: String, _ tokens: String) -> String {
+        t("최고의 날은 \(day) — \(tokens) 토큰.",
+          "Your best day was \(day) — \(tokens) tokens.",
+          "最高の日は \(day)、\(tokens) トークン。",
+          "Tu mejor día fue el \(day): \(tokens) tokens.",
+          "Ton meilleur jour, c'était \(day) : \(tokens) tokens.",
+          "Seu melhor dia foi \(day): \(tokens) tokens.",
+          "Dein bester Tag war \(day) — \(tokens) Tokens.")
+    }
+    var recapNoGraduates: String {
+        t("이 기간에 졸업한 포켓몬이 없어요.", "No graduation in this period.", "この期間の卒業はありません。",
+          "Ninguna graduación en este periodo.", "Aucun diplômé sur cette période.",
+          "Nenhuma formatura neste período.", "Kein Abschluss in diesem Zeitraum.")
+    }
+
     var generalSectionTitle: String { t("일반", "General", "一般", "General", "Général", "Geral", "Allgemein") }
     var providersSectionTitle: String { t("프로바이더", "Providers", "プロバイダー", "Proveedores", "Fournisseurs", "Provedores", "Anbieter") }
     var menuBarSectionTitle: String { t("메뉴바에 표시", "Show in menu bar", "メニューバーに表示", "Mostrar en la barra de menús", "Afficher dans la barre des menus", "Mostrar na barra de menus", "In der Menüleiste anzeigen") }
@@ -388,11 +467,20 @@ struct L {
           "Busca os limites oficiais sem avisos do Keychain. Cole o valor de DevTools → Application → Cookies → claude.ai → sessionKey.",
           "Ruft offizielle Limits ohne Keychain-Pop-up ab. Füge den Wert aus DevTools → Application → Cookies → claude.ai → sessionKey ein.")
     }
-    var sessionKeyDefaultAccountOnly: String {
-        t("기본 Claude 계정(~/.claude)에만 적용됩니다.", "Applies to the default Claude account (~/.claude) only.",
-          "デフォルトの Claude アカウント（~/.claude）にのみ適用されます。", "Solo se aplica a la cuenta de Claude predeterminada (~/.claude).",
-          "Ne concerne que le compte Claude principal (~/.claude).", "Aplica-se apenas à conta padrão do Claude (~/.claude).",
-          "Gilt nur für das Standard-Claude-Konto (~/.claude).")
+    var sessionKeyPerAccountNote: String {
+        t("기본 Claude 계정(~/.claude)에 적용됩니다. 다른 계정은 아래에서 각자 키를 넣을 수 있어요.",
+          "Applies to the default Claude account (~/.claude). Each other account can have its own key below.",
+          "デフォルトの Claude アカウント（~/.claude）に適用されます。ほかのアカウントは下でそれぞれキーを設定できます。",
+          "Se aplica a la cuenta de Claude predeterminada (~/.claude). Cada una de las otras cuentas puede tener su propia clave abajo.",
+          "Concerne le compte Claude principal (~/.claude). Chaque autre compte peut avoir sa propre clé ci-dessous.",
+          "Aplica-se à conta padrão do Claude (~/.claude). Cada uma das outras contas pode ter a própria chave abaixo.",
+          "Gilt für das Standard-Claude-Konto (~/.claude). Jedes weitere Konto kann unten einen eigenen Schlüssel haben.")
+    }
+    /// An additional account's own key row: the account's tab title, or its folder before its limits load.
+    func accountSessionKeyLabel(_ account: String) -> String {
+        t("\(account) 세션 키", "Session key for \(account)", "\(account) のセッションキー",
+          "Clave de sesión de \(account)", "Clé de session de \(account)", "Chave de sessão de \(account)",
+          "Sitzungsschlüssel für \(account)")
     }
     /// 평문 보관을 숨기지 않는다 — 사용자가 무엇을 맡기는지, 어떻게 취소하는지 알아야 한다.
     var sessionKeyStorageNote: String {
@@ -651,6 +739,141 @@ struct L {
           "Importado — Pokédex \(dex) · \(tokens) acumulados",
           "Importiert – \(dex) im Pokédex · \(tokens) insgesamt")
     }
+
+    // MARK: 스냅샷 백업 (설정 → 자동 백업)
+    var snapshotsSectionTitle: String {
+        t("자동 백업 (스냅샷)",
+          "Automatic Backups (Snapshots)",
+          "自動バックアップ（スナップショット）",
+          "Copias automáticas (Instantáneas)",
+          "Sauvegardes automatiques (Instantanés)",
+          "Backups automáticos (Instantâneos)",
+          "Automatische Sicherungen (Snapshots)")
+    }
+    var createSnapshotButton: String {
+        t("스냅샷 만들기",
+          "Create snapshot",
+          "スナップショットを作成",
+          "Crear instantánea",
+          "Créer un instantané",
+          "Criar instantâneo",
+          "Snapshot erstellen")
+    }
+    var createSnapshotHint: String {
+        t("진행 상태의 로컬 복원 지점을 즉시 저장해요 (최근 10개 보존)",
+          "Saves an instant local restore point of your progress (keeps up to 10)",
+          "現在の進行状況の復元ポイントを即座に保存します（最新10件を保持）",
+          "Guarda un punto de restauración local de tu progreso (mantiene hasta 10)",
+          "Enregistre un point de restauration local de ta progression (jusqu'à 10 conservés)",
+          "Salva um ponto de restauração local do seu progresso (mantém até 10)",
+          "Speichert einen lokalen Wiederherstellungspunkt deines Fortschritts (behält bis zu 10)")
+    }
+    var snapshotCreatedToast: String {
+        t("스냅샷이 생성되었습니다",
+          "Snapshot created",
+          "スナップショットを作成しました",
+          "Instantánea creada",
+          "Instantané créé",
+          "Instantâneo criado",
+          "Snapshot erstellt")
+    }
+    var restoreSnapshotButton: String {
+        t("복원",
+          "Restore",
+          "復元",
+          "Restaurar",
+          "Restaurer",
+          "Restaurar",
+          "Wiederherstellen")
+    }
+    var restoreConfirmTitle: String {
+        t("이 스냅샷으로 복원할까요?",
+          "Restore this snapshot?",
+          "このスナップショットに復元しますか？",
+          "¿Restaurar esta instantánea?",
+          "Restaurer cet instantané ?",
+          "Restaurar este instantâneo?",
+          "Diesen Snapshot wiederherstellen?")
+    }
+    func restoreConfirmBody(snapshotDate: String, snapshotDex: Int, snapshotTokens: String,
+                            currentDex: Int, currentTokens: String) -> String {
+        t("""
+          복원할 스냅샷: 도감 \(snapshotDex)마리 · 누적 \(snapshotTokens)
+          저장 시각: \(snapshotDate)
+          현재 상태: 도감 \(currentDex)마리 · 누적 \(currentTokens)
+
+          현재 상태는 새 스냅샷으로 자동 백업된 뒤 복원됩니다.
+          """,
+          """
+          Target snapshot: \(snapshotDex) in Pokédex · \(snapshotTokens) lifetime
+          Created: \(snapshotDate)
+          Current state: \(currentDex) in Pokédex · \(currentTokens) lifetime
+
+          Your current state will be backed up as a new snapshot before restoring.
+          """,
+          """
+          復元するスナップショット: 図鑑 \(snapshotDex)匹 · 累計 \(snapshotTokens)
+          作成日時: \(snapshotDate)
+          現在の状態: 図鑑 \(currentDex)匹 · 累計 \(currentTokens)
+
+          現在の状態は復元前に新しいスナップショットとしてバックアップされます。
+          """,
+          """
+          Instantánea a restaurar: Pokédex \(snapshotDex) · \(snapshotTokens) acumulados
+          Creada: \(snapshotDate)
+          Estado actual: Pokédex \(currentDex) · \(currentTokens) acumulados
+
+          Tu estado actual se guardará como una nueva instantánea antes de restaurar.
+          """,
+          """
+          Instantané à restaurer : Pokédex \(snapshotDex) · \(snapshotTokens) cumulés
+          Créé le : \(snapshotDate)
+          État actuel : Pokédex \(currentDex) · \(currentTokens) cumulés
+
+          Ton état actuel sera sauvegardé dans un nouvel instantané avant la restauration.
+          """,
+          """
+          Instantâneo a restaurar: Pokédex \(snapshotDex) · \(snapshotTokens) acumulados
+          Criado: \(snapshotDate)
+          Estado atual: Pokédex \(currentDex) · \(currentTokens) acumulados
+
+          Seu estado atual será salvo como um novo instantâneo antes de restaurar.
+          """,
+          """
+          Wiederherzustellender Snapshot: \(snapshotDex) im Pokédex · \(snapshotTokens) insgesamt
+          Erstellt: \(snapshotDate)
+          Aktueller Stand: \(currentDex) im Pokédex · \(currentTokens) insgesamt
+
+          Dein aktueller Stand wird vor der Wiederherstellung als neuer Snapshot gesichert.
+          """)
+    }
+    func restoreDoneMessage(dex: Int, tokens: String) -> String {
+        t("복원되었습니다 — 도감 \(dex)마리 · 누적 \(tokens)",
+          "Restored — \(dex) in Pokédex · \(tokens) lifetime",
+          "復元しました — 図鑑 \(dex)匹 · 累計 \(tokens)",
+          "Restaurado — Pokédex \(dex) · \(tokens) acumulados",
+          "Restauré — Pokédex \(dex) · \(tokens) cumulés",
+          "Restaurado — Pokédex \(dex) · \(tokens) acumulados",
+          "Wiederhergestellt – \(dex) im Pokédex · \(tokens) insgesamt")
+    }
+    var noSnapshotsYet: String {
+        t("아직 저장된 스냅샷이 없습니다",
+          "No snapshots saved yet",
+          "保存されたスナップショットはまだありません",
+          "Aún no hay instantáneas guardadas",
+          "Aucun instantané enregistré pour l'instant",
+          "Nenhum instantâneo salvo ainda",
+          "Noch keine Snapshots gespeichert")
+    }
+    func snapshotDexAndTokens(dex: Int, tokens: String) -> String {
+        t("도감 \(dex)마리 · 누적 \(tokens)",
+          "Pokédex \(dex) · \(tokens) lifetime",
+          "図鑑 \(dex)匹 · 累計 \(tokens)",
+          "Pokédex \(dex) · \(tokens) acumulados",
+          "Pokédex \(dex) · \(tokens) cumulés",
+          "Pokédex \(dex) · \(tokens) acumulados",
+          "Pokédex \(dex) · \(tokens) insgesamt")
+    }
     var importErrorNotSaveFile: String {
         t("PokeTokenBar 세이브 파일이 아니에요.",
           "That isn't a PokeTokenBar save file.",
@@ -875,6 +1098,41 @@ struct L {
     var dexFilterHint: String { t("탭하면 이 희귀도만 보기 · 다시 탭하면 전체", "Tap to show only this rarity · tap again to clear", "タップでこの希少度のみ表示・再タップで全体", "Toca para ver solo esta rareza · toca de nuevo para ver todo", "Touche pour n'afficher que cette rareté · touche à nouveau pour tout afficher", "Toque para ver só esta raridade · toque de novo para ver tudo", "Tippe, um nur diese Seltenheit zu sehen · tippe erneut für alle") }
     /// 도감 칸의 ✨ 를 읽어주는 명사 — 이모지는 스크린리더가 일관되게 읽지 못한다.
     var dexShinyLabel: String { t("이로치", "Shiny", "色違い", "Variocolor", "Chromatique", "Shiny", "Schillernd") }
+    var dexSearchPlaceholder: String { t("이름 또는 #번호 검색…", "Search name or #…", "名前または#番号で検索…", "Buscar por nombre o #…", "Rechercher par nom ou #…", "Buscar por nome ou #…", "Nach Name oder # suchen…") }
+    var sortTitle: String { t("정렬", "Sort", "並び替え", "Ordenar", "Trier", "Ordenar", "Sortieren") }
+    var sortDexNumberAsc: String { t("도감 번호 (낮은 순)", "Number (Low to High)", "図鑑番号（昇順）", "Nº de Pokédex (asc.)", "N° de Pokédex (croissant)", "Nº da Pokédex (crescente)", "Nummer (aufsteigend)") }
+    var sortDexNumberDesc: String { t("도감 번호 (높은 순)", "Number (High to Low)", "図鑑番号（降順）", "Nº de Pokédex (desc.)", "N° de Pokédex (décroissant)", "Nº da Pokédex (decrescente)", "Nummer (absteigend)") }
+    var sortNameAsc: String { t("이름 (가나다·A-Z)", "Name (A–Z)", "名前（五十音・A-Z）", "Nombre (A–Z)", "Nom (A–Z)", "Nome (A–Z)", "Name (A–Z)") }
+    var sortNameDesc: String { t("이름 (역순)", "Name (Z–A)", "名前（逆順）", "Nombre (Z–A)", "Nom (Z–A)", "Nome (Z–A)", "Name (Z–A)") }
+    var sortRarity: String { t("희귀도 순", "Rarity (High to Low)", "希少度順", "Rareza (mayor a menor)", "Rareté (décroissante)", "Raridade (maior a menor)", "Seltenheit (absteigend)") }
+    var sortDateDesc: String { t("최근 잡은 순", "Most Recent", "最近捕獲", "Más recientes", "Plus récents", "Mais recentes", "Neueste zuerst") }
+    var sortDateAsc: String { t("오래된 순", "Oldest First", "古い順", "Más antiguos", "Plus anciens", "Mais antigos", "Älteste zuerst") }
+    var filterShinyOnly: String { t("이로치만", "Shiny only", "色違いのみ", "Solo variocolor", "Chromatique uniquement", "Apenas Shiny", "Nur schillernde") }
+    var noSearchResults: String { t("검색 결과가 없어요", "No Pokémon found", "見つかりませんでした", "No se encontraron Pokémon", "Aucun Pokémon trouvé", "Nenhum Pokémon encontrado", "Keine Pokémon gefunden") }
+    var clearFilters: String { t("필터 초기화", "Reset filters", "フィルターを解除", "Restablecer filtros", "Réinitialiser les filtres", "Redefinir filtros", "Filter zurücksetzen") }
+    func label(for option: CompanionStore.DexSortOption) -> String {
+        switch option {
+        case .numberAsc: return sortDexNumberAsc
+        case .numberDesc: return sortDexNumberDesc
+        case .nameAsc: return sortNameAsc
+        case .nameDesc: return sortNameDesc
+        case .rarityDesc: return sortRarity
+        }
+    }
+    func label(for option: CompanionStore.CatchLogSortOption) -> String {
+        switch option {
+        case .recentFirst: return sortDateDesc
+        case .oldestFirst: return sortDateAsc
+        case .numberAsc: return sortDexNumberAsc
+        case .numberDesc: return sortDexNumberDesc
+        case .nameAsc: return sortNameAsc
+        case .nameDesc: return sortNameDesc
+        case .rarityDesc: return sortRarity
+        }
+    }
+    var dexNormalLabel: String { t("일반", "Normal", "通常", "Normal", "Normal", "Normal", "Normal") }
+    var dexAppearance: String { t("모습", "Appearance", "姿", "Aspecto", "Apparence", "Aparência", "Aussehen") }
+    var dexAppearancePreview: String { t("수집한 모습 · 종 정보", "Collected appearance · species reference", "収集した姿・種情報", "Aspecto coleccionado · datos de especie", "Apparence collectionnée · données de l’espèce", "Aparência coletada · dados da espécie", "Gesammeltes Aussehen · Speziesdaten") }
     // MARK: Pokémon 상세
     var loadingPokemonDetails: String { t("포켓몬 정보를 불러오는 중…", "Loading Pokémon details…", "ポケモン情報を読み込み中…", "Cargando detalles del Pokémon…", "Chargement des détails du Pokémon…", "Carregando detalhes do Pokémon…", "Pokémon-Details werden geladen…") }
     var pokemonDetailsUnavailable: String { t("포켓몬 정보를 불러오지 못했어요.", "Pokémon details could not be loaded.", "ポケモン情報を読み込めませんでした。", "No se pudieron cargar los detalles.", "Impossible de charger les détails.", "Não foi possível carregar os detalhes.", "Pokémon-Details konnten nicht geladen werden.") }
@@ -941,31 +1199,34 @@ struct L {
     var statusFocus: String { t("지금은 집중 모드예요.", "In focus mode now.", "今は集中モードです。", "Ahora está en modo concentración.", "En mode concentration.", "Agora está em modo foco.", "Gerade voll konzentriert.") }
     var statusTired: String { t("한도에 가까워요. 잠깐 쉬어도 괜찮아요.", "Close to the limit. A short break is fine.", "上限が近いです。少し休んでも大丈夫。", "Está cerca del límite. Un pequeño descanso no vendría mal.", "Proche de la limite. Une petite pause ne fait pas de mal.", "Está perto do limite. Uma pausa cai bem.", "Fast am Limit. Eine kurze Pause tut gut.") }
     var statusSleep: String { t("지금은 자고 있어요.", "Sleeping now.", "今は眠っています。", "Ahora está durmiendo.", "En train de dormir.", "Agora está dormindo.", "Schläft gerade.") }
-    func statusEvolved(_ name: String) -> String { t("\(name)(으)로 진화했어요!", "Evolved into \(name)!", "\(name) に進化しました！", "¡Evolucionó a \(name)!", "A évolué en \(name) !", "Evoluiu para \(name)!", "Hat sich zu \(name) entwickelt!") }
+    func statusEvolved(_ name: String) -> String { t("\(KoreanParticle.direction.attach(to: name)) 진화했어요!", "Evolved into \(name)!", "\(name) に進化しました！", "¡Evolucionó a \(name)!", "A évolué en \(name) !", "Evoluiu para \(name)!", "Hat sich zu \(name) entwickelt!") }
     var statusGrew: String { t("성장했어요!", "It grew!", "成長しました！", "¡Ha crecido!", "Il a grandi !", "Cresceu!", "Ist gewachsen!") }
 
     // MARK: companion 이벤트 시스템 알림
     var notifHatchTitle: String { t("🥚 부화!", "🥚 Hatched!", "🥚 孵化！", "🥚 ¡Eclosionó!", "🥚 Éclosion !", "🥚 Chocou!", "🥚 Geschlüpft!") }
-    func notifHatchBody(_ name: String) -> String { t("알에서 \(name)이(가) 나왔어요!", "\(name) hatched from the egg!", "タマゴから \(name) が生まれました！", "¡\(name) salió del huevo!", "\(name) est sorti de l'œuf !", "\(name) saiu do ovo!", "\(name) ist aus dem Ei geschlüpft!") }
+    func notifHatchBody(_ name: String) -> String { t("알에서 \(KoreanParticle.subject.attach(to: name)) 나왔어요!", "\(name) hatched from the egg!", "タマゴから \(name) が生まれました！", "¡\(name) salió del huevo!", "\(name) est sorti de l'œuf !", "\(name) saiu do ovo!", "\(name) ist aus dem Ei geschlüpft!") }
     var notifShinyHatchTitle: String { t("✨ 이로치 포켓몬!", "✨ Shiny Pokémon!", "✨ 色違いポケモン！", "✨ ¡Pokémon variocolor!", "✨ Pokémon chromatique !", "✨ Pokémon shiny!", "✨ Schillerndes Pokémon!") }
-    func notifShinyHatchBody(_ name: String) -> String { t("이로치 \(name)이(가) 태어났어요! (1/64)", "A shiny \(name) hatched! (1 in 64)", "色違いの \(name) が生まれました！(1/64)", "¡Nació un \(name) variocolor! (1 entre 64)", "Un \(name) chromatique est né ! (1 sur 64)", "Nasceu um \(name) shiny! (1 em 64)", "Ein schillerndes \(name) ist geschlüpft! (1/64)") }
+    /// 실제 판정에 쓴 분모를 받는다 — 부적이 있으면 64 가 아니다.
+    func notifShinyHatchBody(_ name: String, odds: UInt64) -> String { t("이로치 \(KoreanParticle.subject.attach(to: name)) 태어났어요! (1/\(odds))", "A shiny \(name) hatched! (1 in \(odds))", "色違いの \(name) が生まれました！(1/\(odds))", "¡Nació un \(name) variocolor! (1 entre \(odds))", "Un \(name) chromatique est né ! (1 sur \(odds))", "Nasceu um \(name) shiny! (1 em \(odds))", "Ein schillerndes \(name) ist geschlüpft! (1/\(odds))") }
     var eggImminent: String { t("곧 부화해요!", "About to hatch!", "もうすぐ孵化！", "¡Está a punto de eclosionar!", "Sur le point d'éclore !", "Está quase chocando!", "Schlüpft gleich!") }
     /// 첫 실행(아직 토큰 적립 0) 안내 — "왜 아무 일도 안 일어나지"를 방지.
-    var eggFirstRunHint: String {
-        t("로컬 AI 코딩 도구의 사용량으로 자라요. 약 5M 토큰을 쓰면 알이 부화해요.",
-          "Grows from your local AI coding usage. Your egg hatches after ~5M tokens.",
-          "ローカルの AI コーディング使用量で育ちます。約5Mトークンでタマゴが孵化します。",
-          "Crece con el uso de tus herramientas locales de programación con IA. Tu huevo eclosiona tras unos 5M de tokens.",
-          "Il grandit avec l'usage de tes outils de code IA locaux. Ton œuf éclôt après environ 5M de tokens.",
-          "Cresce com o uso das suas ferramentas locais de programação com IA. O ovo choca depois de uns 5M de tokens.",
-          "Wächst mit der Nutzung deiner lokalen KI-Coding-Tools. Nach etwa 5M Tokens schlüpft dein Ei.") }
+    /// `amount` 는 성장 난이도가 반영된 부화 임계(포맷된 값) — 고정 5M 이 아니다.
+    func eggFirstRunHint(_ amount: String) -> String {
+        t("로컬 AI 코딩 도구의 사용량으로 자라요. 약 \(amount) 토큰을 쓰면 알이 부화해요.",
+          "Grows from your local AI coding usage. Your egg hatches after ~\(amount) tokens.",
+          "ローカルの AI コーディング使用量で育ちます。約\(amount)トークンでタマゴが孵化します。",
+          "Crece con el uso de tus herramientas locales de programación con IA. Tu huevo eclosiona tras unos \(amount) de tokens.",
+          "Il grandit avec l'usage de tes outils de code IA locaux. Ton œuf éclôt après environ \(amount) de tokens.",
+          "Cresce com o uso das suas ferramentas locais de programação com IA. O ovo choca depois de uns \(amount) de tokens.",
+          "Wächst mit der Nutzung deiner lokalen KI-Coding-Tools. Nach etwa \(amount) Tokens schlüpft dein Ei.") }
     var notifEvolveTitle: String { t("✨ 진화!", "✨ Evolved!", "✨ 進化！", "✨ ¡Evolucionó!", "✨ Évolution !", "✨ Evoluiu!", "✨ Entwicklung!") }
-    func notifEvolveBody(_ name: String) -> String { t("\(name)(으)로 진화했어요!", "Evolved into \(name)!", "\(name) に進化しました！", "¡Evolucionó a \(name)!", "A évolué en \(name) !", "Evoluiu para \(name)!", "Hat sich zu \(name) entwickelt!") }
+    func notifEvolveBody(_ name: String) -> String { t("\(KoreanParticle.direction.attach(to: name)) 진화했어요!", "Evolved into \(name)!", "\(name) に進化しました！", "¡Evolucionó a \(name)!", "A évolué en \(name) !", "Evoluiu para \(name)!", "Hat sich zu \(name) entwickelt!") }
     // 메타몽 위장 리빌 — 진화 못 하는 메타몽이 첫 진화 순간 정체를 드러낸다.
     var notifDittoRevealTitle: String { t("🎭 어라? 메타몽!", "🎭 Huh? It's Ditto!", "🎭 あれ？メタモン！", "🎭 ¿Eh? ¡Es Ditto!", "🎭 Hein ? C'est Métamorph !", "🎭 Ué? É um Ditto!", "🎭 Huch? Ditto!") }
     func notifDittoRevealBody(_ disguise: String) -> String { t("\(disguise)인 줄 알았는데 — 사실은 메타몽이었어요!", "You thought it was \(disguise) — it was Ditto all along!", "\(disguise) だと思ってた… 実はメタモンでした！", "Pensabas que era \(disguise) — ¡en realidad era Ditto!", "Tu croyais que c'était \(disguise) — c'était Métamorph depuis le début !", "Você achava que era \(disguise) — era um Ditto o tempo todo!", "Du dachtest, es wäre \(disguise) – dabei war es die ganze Zeit Ditto!") }
     var notifShinyDittoRevealTitle: String { t("🎭✨ 어라? 이로치 메타몽!", "🎭✨ Huh? A shiny Ditto!", "🎭✨ あれ？色違いメタモン！", "🎭✨ ¿Eh? ¡Un Ditto variocolor!", "🎭✨ Hein ? Un Métamorph chromatique !", "🎭✨ Ué? Um Ditto shiny!", "🎭✨ Huch? Ein schillerndes Ditto!") }
-    func notifShinyDittoRevealBody(_ disguise: String) -> String { t("\(disguise)인 줄 알았는데 — 이로치 메타몽이었어요! (1/64)", "You thought it was \(disguise) — it was a shiny Ditto! (1 in 64)", "\(disguise) だと思ってた… 色違いのメタモンでした！(1/64)", "Pensabas que era \(disguise) — ¡era un Ditto variocolor! (1 entre 64)", "Tu croyais que c'était \(disguise) — c'était un Métamorph chromatique ! (1 sur 64)", "Você achava que era \(disguise) — era um Ditto shiny! (1 em 64)", "Du dachtest, es wäre \(disguise) – dabei war es ein schillerndes Ditto! (1/64)") }
+    /// 확률을 적지 않는다 — 이로치는 부화 때 굴렸고, 그때의 부적 보유 여부는 저장되지 않는다.
+    func notifShinyDittoRevealBody(_ disguise: String) -> String { t("\(disguise)인 줄 알았는데 — 이로치 메타몽이었어요!", "You thought it was \(disguise) — it was a shiny Ditto!", "\(disguise) だと思ってた… 色違いのメタモンでした！", "Pensabas que era \(disguise) — ¡era un Ditto variocolor!", "Tu croyais que c'était \(disguise) — c'était un Métamorph chromatique !", "Você achava que era \(disguise) — era um Ditto shiny!", "Du dachtest, es wäre \(disguise) – dabei war es ein schillerndes Ditto!") }
     var notifGraduateTitle: String { t("🎓 졸업!", "🎓 Graduated!", "🎓 卒業！", "🎓 ¡Graduado!", "🎓 Diplômé !", "🎓 Formatura!", "🎓 Abschied!") }
     func notifGraduateBody(_ name: String) -> String { t("\(name) — 도감에 보존! 새 알이 도착했어요.", "\(name) — saved to your Pokédex! A new egg has arrived.", "\(name) — 図鑑に保存！新しいタマゴが届きました。", "\(name) — ¡guardado en tu Pokédex! Ha llegado un nuevo huevo.", "\(name) — conservé dans ton Pokédex ! Un nouvel œuf est arrivé.", "\(name) — guardado na sua Pokédex! Chegou um novo ovo.", "\(name) – in deinem Pokédex gespeichert! Ein neues Ei ist da.") }
 
@@ -1335,7 +1596,7 @@ struct L {
         return t("\(r) 이상 확정", "\(r) or better", "\(r) 以上確定", "\(r) o superior garantizado", "\(r) ou mieux garanti", "\(r) ou melhor garantido", "Garantiert \(r) oder besser")
     }
     func eggConfirm(_ monName: String, _ eggName: String) -> String {
-        t("\(monName)을(를) 놓아주고 \(eggName)(으)로 바꿀까요?",
+        t("\(KoreanParticle.object.attach(to: monName)) 놓아주고 \(KoreanParticle.direction.attach(to: eggName)) 바꿀까요?",
           "Send off \(monName) for the \(eggName)?",
           "\(monName) を手放して \(eggName) にしますか？",
           "¿Soltar a \(monName) y cambiarlo por \(eggName)?",
@@ -1344,7 +1605,9 @@ struct L {
           "\(monName) verabschieden und gegen \(eggName) tauschen?")
     }
     var freshEggShinyWarning: String { t("⚠️ 이로치 포켓몬이에요! 정말 놓아줄까요?", "⚠️ This one is shiny! Really send it off?", "⚠️ 色違いです！本当に手放しますか？", "⚠️ ¡Este es variocolor! ¿Seguro que quieres soltarlo?", "⚠️ Celui-ci est chromatique ! Vraiment le laisser partir ?", "⚠️ Esse é shiny! Quer mesmo soltar?", "⚠️ Dieses Pokémon ist schillernd! Wirklich verabschieden?") }
+    var freshEggLegendaryWarning: String { t("⚠️ 전설 포켓몬이에요! 정말 놓아줄까요?", "⚠️ This is a Legendary Pokémon! Really send it off?", "⚠️ 伝説のポケモンです！本当に手放しますか？", "⚠️ ¡Es un Pokémon legendario! ¿Seguro que quieres soltarlo?", "⚠️ C'est un Pokémon légendaire ! Vraiment le laisser partir ?", "⚠️ Esse é um Pokémon lendário! Quer mesmo soltar?", "⚠️ Dieses Pokémon ist legendär! Wirklich verabschieden?") }
     var freshEggDiscardShiny: String { t("이로치 놓아주기", "Send shiny off", "手放す", "Soltar variocolor", "Laisser partir le chromatique", "Soltar o shiny", "Schillerndes Pokémon verabschieden") }
+    var freshEggDiscardValuable: String { t("놓아주기", "Send off", "手放す", "Soltar", "Laisser partir", "Soltar", "Verabschieden") }
 
     // MARK: 사탕 획득 알림 ("왜 받는지" = 토큰 한도를 다 채운 수고에 대한 보상)
     func notifCandyTitle(item: String, count: Int) -> String {

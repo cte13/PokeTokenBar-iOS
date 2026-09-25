@@ -35,12 +35,8 @@ struct URLSessionSessionKeyClient: SessionKeyHTTPClient {
         "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
     func get(_ url: URL, sessionKey: String) async throws -> SessionKeyHTTPResponse {
-        // 다른 한도 프로바이더와 같은 게이트 — `swift test`·로우 바이너리가 사용자 실계정 자격증명으로
-        // 네트워크를 치지 않게 한다. 세션 키는 Keychain 프롬프트가 없어 *더* 조용히 새기 쉽다:
-        // 스텁을 주입하지 않은 테스트 구성이 그대로 claude.ai 를 호출한다.
-        // 게이트는 자격증명 로드가 아니라 **네트워크 경계**에 둔다(defect-log 동일 항목).
-        // 주입된 테스트용 `SessionKeyHTTPClient` 는 이 타입을 거치지 않으므로 영향받지 않는다.
-        guard AppEnv.isBundledApp || AppEnv.isParityRun else { throw LimitsError.liveFetchNotPermitted }
+        // Tests inject their own `SessionKeyHTTPClient`, so this only stops real calls.
+        guard AppEnv.allowsLiveLimitsFetch else { throw LimitsError.liveFetchNotPermitted }
         var request = URLRequest(url: url, timeoutInterval: 15)
         // 쿠키를 헤더로 직접 넣는다. 공유 저장소가 개입하면 이 헤더를 덮어써 인증이 뒤바뀔 수 있다.
         request.httpShouldHandleCookies = false
@@ -84,6 +80,13 @@ struct SessionKeyStore: Sendable {
     /// 실제 자격증명을 건드리지 않게. 환경변수 해석은 `AppStatePaths` 가 전담한다.
     private static func defaultURL() -> URL {
         AppStatePaths.directory().appendingPathComponent("session-key.json")
+    }
+
+    /// An additional Claude account's own key (`ClaudeAccountRoots`), next to the default one.
+    /// Named by the folder's path hash, like its alert and candy keys, so no path ends up in a file name.
+    static func forConfigRoot(_ root: URL, directory: URL = AppStatePaths.directory()) -> SessionKeyStore {
+        SessionKeyStore(fileURL: directory.appendingPathComponent(
+            "session-key-\(ClaudeAccountRoots.pathKey(for: root)).json"))
     }
 
     func load() -> SessionKeyCredential? {
@@ -295,6 +298,20 @@ struct SessionKeyLimitsProvider: ClaudeLimitsProviding, SessionKeyManaging {
 struct ChainedLimitsProvider: ClaudeLimitsProviding {
     let primary: any ClaudeLimitsProviding
     let fallback: any ClaudeLimitsProviding
+
+    /// An additional Claude folder: its own session key first, so automatic polls keep it fresh
+    /// without the Keychain, then the folder's Claude Code token as before.
+    static func forConfigRoot(
+        _ root: URL,
+        sessionKeyDirectory: URL = AppStatePaths.directory(),
+        http: any SessionKeyHTTPClient = URLSessionSessionKeyClient(),
+        fallback: (any ClaudeLimitsProviding)? = nil) -> ChainedLimitsProvider
+    {
+        ChainedLimitsProvider(
+            primary: SessionKeyLimitsProvider(
+                store: .forConfigRoot(root, directory: sessionKeyDirectory), http: http),
+            fallback: fallback ?? OAuthLimitsProvider(accessTokenCache: .forConfigRoot(root)))
+    }
 
     func fetch(allowKeychainPrompt: Bool) async throws -> LimitStatus {
         do {

@@ -29,9 +29,10 @@ final class LimitHistoryStore {
         let end: Date
         let peak: Double
         let sampleCount: Int
-        /// The window was cut by an observation gap (app not running), so `peak` is a lower bound
-        /// on what was really used and the window count around it may be off. Surfaced so the UI
-        /// can say "partial" instead of quietly presenting a hole as a fact.
+        /// The window ended while the app was not running, so usage between the last sample and
+        /// the reset went unobserved: `peak` is a lower bound, and whole windows may have come and
+        /// gone inside the gap. Surfaced so the UI can say "partial" instead of quietly presenting
+        /// a hole as a fact.
         let truncated: Bool
     }
 
@@ -53,9 +54,9 @@ final class LimitHistoryStore {
     static let heartbeat: TimeInterval = 15 * 60
     /// Utilization moves smaller than this are not worth a row (the endpoint reports fractions).
     static let minimumDelta: Double = 0.5
-    /// Two samples further apart than this did not observe the same window continuously. Slightly
-    /// over the 5-hour session window so a normal overnight gap reads as a gap, not as one window.
-    static let maxGap: TimeInterval = 6 * 60 * 60
+    /// Fallback window length for a series whose key has no registered duration — the shortest
+    /// window any provider reports, so an unknown series errs toward splitting at a gap.
+    static let defaultWindowDuration: TimeInterval = 5 * 60 * 60
     static let retention: TimeInterval = 90 * 24 * 60 * 60
     /// Backstop against unbounded growth if a provider ever reports jittery utilization: at the
     /// 15-minute heartbeat, 90 days of one window is ~8.6k samples, so this is headroom, not a cap
@@ -138,8 +139,14 @@ final class LimitHistoryStore {
 
     /// Derived windows for one series, newest last.
     func windows(providerID: String, window: String) -> [Window] {
-        Self.windows(from: samples(providerID: providerID, window: window), maxGap: Self.maxGap)
+        Self.windows(from: samples(providerID: providerID, window: window),
+                     windowDuration: Self.windowDurations[window] ?? Self.defaultWindowDuration)
     }
+
+    /// Length of each recorded window, keyed by window id. Each provider adapter below contributes
+    /// its own entries, so the splitter never branches on a provider.
+    static let windowDurations: [String: TimeInterval] =
+        ClaudeWindow.durations.merging(AntigravityWindow.durations) { first, _ in first }
 
     func summary(providerID: String, window: String, threshold: Double, limit: Int) -> Summary {
         Self.summarize(windows(providerID: providerID, window: window),
@@ -148,42 +155,56 @@ final class LimitHistoryStore {
 
     // MARK: - Derivation (pure)
 
-    /// Split a sample series into windows at resets and at observation gaps.
-    static func windows(from samples: [Sample], maxGap: TimeInterval) -> [Window] {
+    /// Split a sample series into windows at resets, including resets hidden inside an
+    /// observation gap.
+    ///
+    /// Utilization is cumulative within a window: it only climbs until the reset (bar a rolling
+    /// window's slow decay). So when the app resumes after a gap *inside* the same window, the
+    /// first sample already includes everything used while it was not running — nothing was lost,
+    /// and the gap is neither a boundary nor a reason to dim. A gap only hides something when a
+    /// reset fell inside it; then the tail of the window before it went unobserved. That is
+    /// certain when the gap outlasts the window, and evident when utilization came back lower.
+    ///
+    /// Splitting at every gap longer than a 5-hour session used to shatter one weekly window into
+    /// a bar per night the Mac slept, all dimmed, inflating "N of 14" (see defect-log).
+    ///
+    /// Blind spot: a gap shorter than the window that straddles a reset *and* is followed by
+    /// usage climbing past the old level reads as one window. Recording `resets_at` would close
+    /// it, but the rolling weekly window's instant moves on every fetch, so it is not a key.
+    static func windows(from samples: [Sample], windowDuration: TimeInterval) -> [Window] {
         guard !samples.isEmpty else { return [] }
         var result: [Window] = []
         var current: [Sample] = [samples[0]]
-        var truncated = false
 
-        func flush(truncatedByGap: Bool) {
+        func flush(truncated: Bool) {
             guard let first = current.first, let last = current.last else { return }
             result.append(Window(
                 start: first.at, end: last.at,
                 peak: current.map(\.utilization).max() ?? 0,
                 sampleCount: current.count,
-                truncated: truncated || truncatedByGap))
+                truncated: truncated))
         }
 
         for sample in samples.dropFirst() {
             let previous = current[current.count - 1]
-            let gapped = sample.at.timeIntervalSince(previous.at) > maxGap
-            if gapped {
-                // A gap hides whatever happened while we were not looking. The window we were in
-                // ends here with an understated peak, and the one we resume into started blind.
-                flush(truncatedByGap: true)
+            let gap = sample.at.timeIntervalSince(previous.at)
+            let resetInGap = gap >= windowDuration
+                || (gap > heartbeat && previous.utilization - sample.utilization >= 5.0)
+            if resetInGap {
+                // The window before the gap ended unobserved. The one we resume into is exact:
+                // its first sample already counts all usage since its own reset.
+                flush(truncated: true)
                 current = [sample]
-                truncated = true
                 continue
             }
             if isReset(previous: previous.utilization, current: sample.utilization) {
-                flush(truncatedByGap: false)
+                flush(truncated: false)
                 current = [sample]
-                truncated = false
                 continue
             }
             current.append(sample)
         }
-        flush(truncatedByGap: false)
+        flush(truncated: false)
         return result
     }
 
@@ -271,6 +292,11 @@ extension LimitHistoryStore {
 
         /// Display order for the history section, matching the live limit rows above it.
         static let displayed = [fiveHour, sevenDay]
+
+        static let durations: [String: TimeInterval] = [
+            fiveHour: 5 * 60 * 60,
+            sevenDay: 7 * 24 * 60 * 60,
+        ]
     }
 
     /// Flatten a `LimitStatus` into recordable windows. Only the two windows every plan reports are
@@ -305,6 +331,13 @@ extension LimitHistoryStore {
             geminiWeekly,
             thirdPartyFiveHour,
             thirdPartyWeekly,
+        ]
+
+        static let durations: [String: TimeInterval] = [
+            geminiFiveHour: 5 * 60 * 60,
+            geminiWeekly: 7 * 24 * 60 * 60,
+            thirdPartyFiveHour: 5 * 60 * 60,
+            thirdPartyWeekly: 7 * 24 * 60 * 60,
         ]
     }
 

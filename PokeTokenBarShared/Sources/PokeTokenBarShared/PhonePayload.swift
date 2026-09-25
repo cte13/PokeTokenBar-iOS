@@ -276,7 +276,8 @@ public struct PhoneLimitHistoryWindow: Codable, Sendable, Equatable {
     /// Highest utilization observed during the window. A lower bound when `truncated`.
     public let peak: Double
     public let end: Date
-    /// The Mac was not running for part of this window, so `peak` understates it.
+    /// The window reset while the Mac was not running, so its final stretch went unobserved and
+    /// `peak` may understate it.
     public let truncated: Bool
 
     public init(peak: Double, end: Date, truncated: Bool) {

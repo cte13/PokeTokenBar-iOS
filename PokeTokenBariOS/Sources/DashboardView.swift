@@ -485,7 +485,7 @@ struct LimitHistoryCard: View {
             }
             if hasAnyTruncated {
                 Divider()
-                Text("Dimmed windows were partly unobserved — the Mac was not running.")
+                Text("Dimmed windows reset while the Mac was off — their peak may be higher.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

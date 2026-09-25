@@ -103,8 +103,8 @@ final class LimitHistoryTests: XCTestCase {
     // MARK: - Window derivation
 
     func testEmptyAndSingleSampleSeries() {
-        XCTAssertTrue(LimitHistoryStore.windows(from: [], maxGap: 3600).isEmpty)
-        let one = LimitHistoryStore.windows(from: [sample(0, 42)], maxGap: 3600)
+        XCTAssertTrue(LimitHistoryStore.windows(from: [], windowDuration: 3600).isEmpty)
+        let one = LimitHistoryStore.windows(from: [sample(0, 42)], windowDuration: 3600)
         XCTAssertEqual(one.count, 1)
         XCTAssertEqual(one.first?.peak, 42)
         XCTAssertEqual(one.first?.sampleCount, 1)
@@ -117,7 +117,7 @@ final class LimitHistoryTests: XCTestCase {
             sample(60, 2),                                   // reset → new window
             sample(75, 30), sample(90, 51),
         ]
-        let windows = LimitHistoryStore.windows(from: samples, maxGap: 6 * 3600)
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
         XCTAssertEqual(windows.count, 2)
         XCTAssertEqual(windows[0].peak, 88)
         XCTAssertEqual(windows[0].sampleCount, 4)
@@ -131,37 +131,125 @@ final class LimitHistoryTests: XCTestCase {
     func testRollingDecaySeriesStaysOneWindow() {
         // 90 → 62 over seven hours, never halving, never falling 5pp between polls.
         let samples = (0..<28).map { step in sample(Double(step) * 15, 90 - Double(step)) }
-        let windows = LimitHistoryStore.windows(from: samples, maxGap: 6 * 3600)
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
         XCTAssertEqual(windows.count, 1, "rolling decay must not read as repeated resets")
         XCTAssertEqual(windows[0].peak, 90)
     }
 
-    func testGapSplitsAndMarksBothSidesTruncated() {
+    private let week: TimeInterval = 7 * 24 * 3600
+
+    /// A gap longer than the window guarantees a reset fell inside it: the window before it lost
+    /// its tail, but the one we resume into counts everything since its own reset, so it is exact.
+    func testGapLongerThanWindowSplitsAndTruncatesOnlyTheWindowBefore() {
         let samples = [
             sample(0, 20), sample(15, 55),
             sample(60 * 12, 70), sample(60 * 12 + 15, 75),   // 12h later: app was closed
         ]
-        let windows = LimitHistoryStore.windows(from: samples, maxGap: 6 * 3600)
-        XCTAssertEqual(windows.count, 2)
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
+        XCTAssertEqual(windows.count, 2, "utilization rose, so only the gap length can split it")
         XCTAssertTrue(windows[0].truncated, "peak before the gap is only a lower bound")
-        XCTAssertTrue(windows[1].truncated, "the window we resumed into started unobserved")
+        XCTAssertFalse(windows[1].truncated, "cumulative usage — its first sample saw everything")
         XCTAssertEqual(windows[0].peak, 55)
         XCTAssertEqual(windows[1].peak, 75)
     }
 
-    /// A reset observed *after* a gap must clear the truncated flag: that window was watched from
-    /// its start, so its peak is exact and should not be dimmed as partial forever after.
-    func testResetAfterGapClearsTruncation() {
+    /// The reported regression: the Mac sleeping overnight cut one weekly window into a dimmed
+    /// bar per night. A gap shorter than the window with utilization still climbing is the same
+    /// window, fully counted.
+    func testOvernightGapsInsideTheWeekStayOneExactWindow() {
+        let samples = [
+            sample(0, 10), sample(60, 14),
+            sample(60 * 14, 15),              // 13h overnight gap
+            sample(60 * 30, 22),              // 16h gap
+            sample(60 * 60, 48),              // 30h gap
+        ]
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: week)
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertFalse(windows[0].truncated)
+        XCTAssertEqual(windows[0].peak, 48)
+    }
+
+    /// A reset hidden in a gap shorter than the window, visible only as utilization coming back
+    /// lower — without halving, so `isReset` alone would merge the two weeks.
+    func testDropAcrossShortGapSplitsEvenWithoutHalving() {
+        XCTAssertFalse(LimitHistoryStore.isReset(previous: 60, current: 35),
+                       "precondition: this drop is invisible to the continuous reset rule")
+        let samples = [sample(0, 50), sample(60, 60), sample(60 * 21, 35), sample(60 * 22, 38)]
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: week)
+        XCTAssertEqual(windows.map(\.peak), [60, 38])
+        XCTAssertEqual(windows.map(\.truncated), [true, false])
+    }
+
+    /// The same drop between two adjacent polls is not a gap — rolling decay is judged by
+    /// `isReset` alone there, as `testRollingDecaySeriesStaysOneWindow` relies on.
+    func testDropWithoutAGapIsLeftToTheResetRule() {
+        let samples = [sample(0, 60), sample(15, 54)]
+        XCTAssertEqual(LimitHistoryStore.windows(from: samples, windowDuration: week).count, 1)
+    }
+
+    /// End-to-end on a user's recorded Claude weekly series (2026-09-23 → 25, trimmed; minutes
+    /// from the first sample): the 89% week, the Thursday 09:01 reset watched live, then two gaps
+    /// from Mac sleep (9.4h, 6.6h). This drew as four bars — 89% plus three dimmed near-zero
+    /// "weeks" — and must draw as two exact ones.
+    func testRecordedWeeklySeriesAroundAReset() {
+        let samples = [
+            sample(0, 76), sample(468.8, 76),               // 7.8h gap inside the week
+            sample(509.9, 80), sample(1093.4, 81),
+            sample(1232.9, 88), sample(1244.9, 89),
+            sample(1250.5, 0),                              // Thu 09:01 reset
+            sample(1814.4, 0),                              // 9.4h gap
+            sample(1892.4, 2), sample(2689.9, 6),
+            sample(2925.1, 6),
+            sample(3322.0, 6),                              // 6.6h gap
+            sample(3390.9, 7),
+        ]
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: week)
+        XCTAssertEqual(windows.map(\.peak), [89, 7])
+        XCTAssertEqual(windows.map(\.truncated), [false, false])
+        XCTAssertEqual(windows[1].sampleCount, 7)
+    }
+
+    /// Series keys must resolve to their real length; an unregistered key falls back to the
+    /// shortest window so it errs toward splitting.
+    func testWindowDurationsCoverEveryDisplayedWindow() {
+        let displayed = LimitHistoryStore.ClaudeWindow.displayed
+            + LimitHistoryStore.AntigravityWindow.displayed
+        for window in displayed {
+            XCTAssertNotNil(LimitHistoryStore.windowDurations[window], window)
+        }
+        XCTAssertEqual(LimitHistoryStore.windowDurations[LimitHistoryStore.ClaudeWindow.sevenDay], week)
+        XCTAssertEqual(LimitHistoryStore.windowDurations[LimitHistoryStore.ClaudeWindow.fiveHour], 5 * 3600)
+    }
+
+    /// Through the store: a weekly series with an overnight gap must use the weekly length, not
+    /// the 5-hour fallback.
+    func testStoreUsesTheWeeklyDurationForTheWeeklySeries() {
+        var clock = epoch
+        let store = LimitHistoryStore(fileURL: file(), now: { clock })
+        for (hours, utilization) in [(0.0, 10.0), (12, 20), (30, 35)] {
+            clock = epoch.addingTimeInterval(hours * 3600)
+            store.record(providerID: "claude_code", windows: [
+                (LimitHistoryStore.ClaudeWindow.sevenDay, utilization),
+                (LimitHistoryStore.ClaudeWindow.fiveHour, utilization),
+            ])
+        }
+        XCTAssertEqual(store.windows(providerID: "claude_code",
+                                     window: LimitHistoryStore.ClaudeWindow.sevenDay).count, 1)
+        XCTAssertEqual(store.windows(providerID: "claude_code",
+                                     window: LimitHistoryStore.ClaudeWindow.fiveHour).count, 3)
+    }
+
+    /// A reset observed *after* a gap starts a fully observed window.
+    func testResetAfterGapStartsAnExactWindow() {
         let samples = [
             sample(0, 20),
-            sample(60 * 12, 70),          // gap → truncated window starts
+            sample(60 * 12, 70),          // gap longer than the window
             sample(60 * 12 + 15, 1),      // reset → a fully observed window begins
             sample(60 * 12 + 30, 44),
         ]
-        let windows = LimitHistoryStore.windows(from: samples, maxGap: 6 * 3600)
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
         XCTAssertEqual(windows.count, 3)
-        XCTAssertTrue(windows[1].truncated)
-        XCTAssertFalse(windows[2].truncated, "observed from its own reset onward")
+        XCTAssertEqual(windows.map(\.truncated), [true, false, false])
         XCTAssertEqual(windows[2].peak, 44)
     }
 

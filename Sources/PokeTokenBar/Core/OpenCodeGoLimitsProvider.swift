@@ -28,7 +28,7 @@ struct OpenCodeGoLimitsProvider: OpenCodeGoLimitsProviding, Sendable {
         // 알림·키체인·프로덕션 로그와 동일 규약. UsageStore 에 새 한도 프로바이더가 붙을 때마다 모든
         // 테스트 구성이 스텁을 챙겨야 하는 구조적 허점의 기계적 봉쇄). 라이브 검증은 PTB_PARITY=1
         // 파리티 테스트(testLiveOpenCodeGoUsageEndpoint)가 이 프로바이더를 직접 호출한다.
-        guard AppEnv.isBundledApp || AppEnv.isParityRun else { return nil }
+        guard AppEnv.allowsLiveLimitsFetch else { return nil }
         guard let key = Self.readAPIKey(candidates: authFileCandidates) else { return nil }
         let (data, response) = try await URLSession.shared.data(for: Self.makeRequest(key: key))
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {

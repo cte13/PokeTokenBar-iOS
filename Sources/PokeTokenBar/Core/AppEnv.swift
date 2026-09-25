@@ -9,15 +9,25 @@ enum AppEnv {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app")
     }
 
-    /// `PTB_PARITY=1` 로 지정된 QA/파리티 실행 — 라이브 엔드포인트 검증(LocalUsageParityTests)처럼
-    /// 실 IO 가 *허용*되는 모드. isBundledApp 게이트를 여는 방향으로만 쓴다(닫는 방향 아님).
-    /// CompanionStore 의 PTB_STATE_DIR 과 같은 개발/QA 전용 플래그 부류라 여기서 직독한다.
+    /// `PTB_PARITY=1` — a QA/parity run where live endpoints are allowed (the same flag the parity
+    /// smoke tests already use). Only ever opens a gate that `isBundledApp` keeps closed.
     static var isParityRun: Bool {
         ProcessInfo.processInfo.environment["PTB_PARITY"] == "1"
     }
 
-    /// 테스트에서 URLProtocol 등 가짜 네트워크를 등록하고 fetch 를 돌릴 때 게이트 바이패스
-    nonisolated(unsafe) static var allowLiveFetchForTesting: Bool = false
+    /// Lets a test drive a provider's real network code against a stubbed transport (URLProtocol, an
+    /// injected URLSession). Set it in the test and reset it in `defer`.
+    nonisolated(unsafe) static var allowLiveFetchForTesting = false
+
+    /// Whether a limits provider may send the user's credentials to a live endpoint. Closed under
+    /// `swift test` and for a raw `swift build` binary: a test that does not inject a stub would
+    /// otherwise call Anthropic, Google or Cursor with the real login found on the machine
+    /// (`~/.claude/.credentials.json`, the Antigravity token file, Cursor's `state.vscdb`).
+    /// Put the check at the network boundary, not before the credential read, so the Keychain path
+    /// tests keep observing real reads. `LiveCredentialCallGateTests` requires it in every provider.
+    static var allowsLiveLimitsFetch: Bool {
+        isBundledApp || isParityRun || allowLiveFetchForTesting
+    }
 
     /// 사용자 상태 파일(Application Support 등)을 실제로 읽고 쓸 것인가.
     ///

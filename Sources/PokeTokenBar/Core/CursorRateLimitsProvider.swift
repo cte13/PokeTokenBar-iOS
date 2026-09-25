@@ -97,13 +97,8 @@ public struct CursorRateLimitsProvider: CursorLimitsProviding, Sendable {
     }
 
     private static func perform(_ request: URLRequest) async -> (Data, Int)? {
-        // The only real network boundary (usage and token refresh both come here); tests inject
-        // `transportForTesting` instead. `swift test` must not reach api2.cursor.sh with the user's
-        // Cursor login — LiveCredentialCallGateTests enforces this gate for every limits provider.
-        guard AppEnv.isBundledApp || AppEnv.isParityRun || AppEnv.allowLiveFetchForTesting else {
-            AppLog.write("cursor limits: live fetch not permitted outside the app bundle")
-            return nil
-        }
+        // The only real network boundary (usage and token refresh); tests inject `transportForTesting`.
+        guard AppEnv.allowsLiveLimitsFetch else { return nil }
         do {
             let (data, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0

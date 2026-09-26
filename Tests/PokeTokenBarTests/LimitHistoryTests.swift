@@ -187,6 +187,40 @@ final class LimitHistoryTests: XCTestCase {
         XCTAssertEqual(LimitHistoryStore.windows(from: samples, windowDuration: week).count, 1)
     }
 
+    /// A reset watched live at the slowest refresh preset. With utilization pinned, rows land only
+    /// on the heartbeat, and the poll that crosses it can come a whole refresh interval later — so
+    /// rows ~30 minutes apart are normal observation, not the app being off. The drop rule used to
+    /// fire on any gap past the heartbeat and dimmed these windows as "reset while the Mac was off".
+    func testResetWatchedAtTheSlowestRefreshIsNotDimmed() {
+        let slowest = UsageStore.intervalPresets.map(\.value).max()! / 60
+        let rowGap = LimitHistoryStore.heartbeat / 60 + slowest   // 15 + 15 minutes
+        let samples = [
+            sample(0, 70), sample(rowGap, 70),
+            sample(rowGap * 2, 2),                   // 5h reset, seen by the next poll
+            sample(rowGap * 3, 9),
+        ]
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
+        XCTAssertEqual(windows.map(\.peak), [70, 9])
+        XCTAssertEqual(windows.map(\.truncated), [false, false])
+    }
+
+    /// Past the slowest normal row spacing the drop does mean polling stopped across a reset.
+    func testDropPastTheObservedGapStillSplitsAndDims() {
+        let gap = LimitHistoryStore.maxObservedGap / 60 + 1
+        let samples = [sample(0, 70), sample(gap, 40)]
+        let windows = LimitHistoryStore.windows(from: samples, windowDuration: 5 * 3600)
+        XCTAssertEqual(windows.map(\.truncated), [true, false])
+    }
+
+    /// The gap threshold must cover every refresh preset — a slower preset added later would
+    /// otherwise dim resets the app watched live.
+    func testObservedGapCoversTheSlowestRefreshPreset() {
+        for preset in UsageStore.intervalPresets {
+            XCTAssertGreaterThan(LimitHistoryStore.maxObservedGap,
+                                 LimitHistoryStore.heartbeat + preset.value, preset.label)
+        }
+    }
+
     /// End-to-end on a user's recorded Claude weekly series (2026-09-23 → 25, trimmed; minutes
     /// from the first sample): the 89% week, the Thursday 09:01 reset watched live, then two gaps
     /// from Mac sleep (9.4h, 6.6h). This drew as four bars — 89% plus three dimmed near-zero

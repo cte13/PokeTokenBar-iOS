@@ -54,6 +54,13 @@ final class LimitHistoryStore {
     static let heartbeat: TimeInterval = 15 * 60
     /// Utilization moves smaller than this are not worth a row (the endpoint reports fractions).
     static let minimumDelta: Double = 0.5
+    /// Longest spacing between two rows while the app is running and polling: a row is forced
+    /// only once the heartbeat has passed, and the poll that notices can land up to one refresh
+    /// interval later (the slowest preset), plus slack for timer drift. Only a longer gap means
+    /// polling stopped — the app was off, the Mac slept, or a 429 backoff held the fetch.
+    /// Derived from the presets so adding a slower one widens it instead of dimming watched resets.
+    static let maxObservedGap: TimeInterval =
+        heartbeat + (UsageStore.intervalPresets.map(\.value).max() ?? 0) + 5 * 60
     /// Fallback window length for a series whose key has no registered duration — the shortest
     /// window any provider reports, so an unknown series errs toward splitting at a gap.
     static let defaultWindowDuration: TimeInterval = 5 * 60 * 60
@@ -189,7 +196,7 @@ final class LimitHistoryStore {
             let previous = current[current.count - 1]
             let gap = sample.at.timeIntervalSince(previous.at)
             let resetInGap = gap >= windowDuration
-                || (gap > heartbeat && previous.utilization - sample.utilization >= 5.0)
+                || (gap > maxObservedGap && previous.utilization - sample.utilization >= 5.0)
             if resetInGap {
                 // The window before the gap ended unobserved. The one we resume into is exact:
                 // its first sample already counts all usage since its own reset.

@@ -50,9 +50,11 @@ enum AppLog {
         backend.writeAndFlush(formatted(message))
     }
 
-    /// 상태가 그대로면 억제하고, 바뀌면 즉시 기록하는 `write` — 폴마다 반복되는 상태 줄 전용.
-    /// 판정은 `LogRepeatSuppressor`(순수)에 있고 여기서는 잠금만 책임진다.
-    /// 값이 매 틱 변하는 줄(토큰 수·합계)에는 쓰지 말 것 — 억제가 걸리지 않아 이득 없이 잠금만 든다.
+    /// `write` for status lines repeated on every poll: an unchanged state is suppressed (reaffirmed
+    /// once per `repeatAfter`), a changed one is written at once. The decision lives in
+    /// `LogRepeatSuppressor`; this only adds the lock. Do not use it for lines whose values change
+    /// every tick (token counts, totals) or for events: nothing would be suppressed, or an event
+    /// would be lost.
     static func writeIfChanged(_ key: String, _ message: String, repeatAfter: TimeInterval = 3600) {
         guard AppEnv.isBundledApp else { return }
         suppressorLock.lock()
@@ -62,7 +64,7 @@ enum AppLog {
         backend.write(formatted(message))
     }
 
-    /// 딕셔너리 변이라 Bool 플래그와 달리 실제 경합이 위험하다 — 잠금으로 감싼다.
+    /// A dictionary mutated from several threads (unlike a Bool flag), so it needs the lock.
     nonisolated(unsafe) private static var suppressor = LogRepeatSuppressor()
     private static let suppressorLock = NSLock()
 

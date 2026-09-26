@@ -3,6 +3,9 @@ import PokeTokenBarShared
 
 struct DashboardView: View {
     @Environment(PhonePayloadStore.self) private var store
+    /// Provider tab selection. Persisted so reopening the app keeps the service you were watching,
+    /// like the Mac popover's `PopoverNavigation.providerID`.
+    @AppStorage("dashboard.selectedProviderID") private var selectedProviderID = ""
 
     var body: some View {
         NavigationStack {
@@ -58,19 +61,14 @@ struct DashboardView: View {
                     DailyTrendCard(days: trend)
                 }
 
-                if let limits = payload.limits {
-                    LimitsCard(limits: limits, isProviderVisible: { store.isProviderVisible($0) })
-                    let history = filteredHistory(limits.history ?? [])
-                    if !history.isEmpty {
-                        LimitHistoryCard(series: history, limits: limits)
+                // Totals above stay cross-provider; details, limits and history are scoped to the
+                // selected tab, same split as the Mac popover. One provider → no tab bar.
+                let tabs = payload.providerTabs(isProviderVisible: { store.isProviderVisible($0) })
+                if let selected = selectedTab(in: tabs) {
+                    if tabs.count > 1 {
+                        ProviderTabBar(tabs: tabs, selectedID: selected.id) { selectedProviderID = $0 }
                     }
-                }
-
-                let providers = store.visibleProviders
-                if !providers.isEmpty {
-                    ForEach(providers, id: \.id) { provider in
-                        ProviderDetailCard(provider: provider)
-                    }
+                    providerContent(payload, providerID: selected.id)
                 }
 
                 Text("Mac app v\(payload.serverVersion)")
@@ -81,17 +79,25 @@ struct DashboardView: View {
         }
     }
 
-    private func filteredHistory(_ series: [PhoneLimitHistorySeries]) -> [PhoneLimitHistorySeries] {
-        let showClaude = store.isProviderVisible("claude_code")
-        let showAgy = store.isProviderVisible("antigravity")
-        return series.filter { s in
-            let isAgy = s.label.localizedCaseInsensitiveContains("gemini")
-                || s.label.localizedCaseInsensitiveContains("antigravity")
-                || (s.label.localizedCaseInsensitiveContains("claude") && s.label.localizedCaseInsensitiveContains("gpt"))
-            if isAgy { return showAgy }
-            let isClaude = s.label.localizedCaseInsensitiveContains("claude")
-            if isClaude { return showClaude }
-            return true
+    /// The stored tab, or the first one when nothing is stored or that provider is gone/hidden.
+    private func selectedTab(in tabs: [ProviderMetadata]) -> ProviderMetadata? {
+        tabs.first(where: { $0.id == selectedProviderID }) ?? tabs.first
+    }
+
+    @ViewBuilder
+    private func providerContent(_ payload: PhonePayload, providerID: String) -> some View {
+        if let provider = payload.providers.first(where: { $0.id == providerID }) {
+            ProviderDetailCard(provider: provider)
+        }
+        if let limits = payload.limits {
+            let group = limits.limitGroups.first { $0.providerID == providerID }
+            if let group {
+                LimitsCard(limits: limits, group: group)
+            }
+            let history = limits.historySeries(forProvider: providerID)
+            if !history.isEmpty {
+                LimitHistoryCard(series: history, limits: limits, group: group)
+            }
         }
     }
 
@@ -396,13 +402,48 @@ struct UsageCard: View {
     }
 }
 
+// MARK: - Provider Tab Bar
+
+/// Service tabs, the phone counterpart of the Mac popover's `ProviderTabBar`: capsules in a
+/// horizontal scroll so each keeps its natural one-line width however many providers there are.
+struct ProviderTabBar: View {
+    let tabs: [ProviderMetadata]
+    let selectedID: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tabs) { tab in
+                    let isSelected = tab.id == selectedID
+                    Button { onSelect(tab.id) } label: {
+                        Text(tab.displayName)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1))
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .sensoryFeedback(.selection, trigger: selectedID)
+    }
+}
+
 // MARK: - Limits Card
 
-/// One card per provider group (Claude / Codex / Go / Antigravity) driven by `limitGroups`, so any
-/// window the Mac adds to the payload shows up here without another hand-written `if let`.
+/// Limit windows for the selected provider tab, driven by `limitGroups` so any window the Mac adds
+/// to the payload shows up here without another hand-written `if let`.
 struct LimitsCard: View {
     let limits: PhoneLimitStatus
-    var isProviderVisible: (String) -> Bool = { _ in true }
+    let group: PhoneLimitGroup
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -410,7 +451,7 @@ struct LimitsCard: View {
                 Text("Rate Limits")
                     .font(.headline)
                 Spacer()
-                if let plan = limits.planDisplay {
+                if let plan = group.plan {
                     Text(plan)
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 6)
@@ -420,25 +461,8 @@ struct LimitsCard: View {
                         .clipShape(Capsule())
                 }
             }
-
-            let groups = limits.filteredLimitGroups(isProviderVisible: isProviderVisible)
-            if groups.isEmpty {
-                Text("No rate limits active")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
-                if index > 0 { Divider() }
-                VStack(alignment: .leading, spacing: 8) {
-                    if groups.count > 1 {
-                        Text(group.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(Array(group.windows.enumerated()), id: \.offset) { _, w in
-                        LimitRow(window: w, label: shortLabel(w.label, group: group.title, groupCount: groups.count), limits: limits)
-                    }
-                }
+            ForEach(Array(group.windows.enumerated()), id: \.offset) { _, w in
+                LimitRow(window: w, label: group.shortLabel(w.label), limits: limits)
             }
         }
         .padding()
@@ -446,16 +470,9 @@ struct LimitsCard: View {
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
-
-    /// With a group header above, drop the repeated brand prefix ("Claude Weekly" → "Weekly").
-    private func shortLabel(_ label: String, group: String, groupCount: Int) -> String {
-        guard groupCount > 1, label.hasPrefix(group + " ") else { return label }
-        let trimmed = String(label.dropFirst(group.count + 1))
-        return trimmed.isEmpty ? label : trimmed
-    }
 }
 
-/// Per-window peak history for the Claude limits.
+/// Per-window peak history for the selected provider's limits.
 ///
 /// Everything here is recorded by the Mac — no API reports past limit usage, so a phone that has
 /// never been paired with a running Mac has no history to show and this card simply does not
@@ -464,6 +481,8 @@ struct LimitsCard: View {
 struct LimitHistoryCard: View {
     let series: [PhoneLimitHistorySeries]
     let limits: PhoneLimitStatus
+    /// The tab's live limit group, used only to drop its brand prefix from series labels.
+    var group: PhoneLimitGroup? = nil
 
     private var hasAnyTruncated: Bool {
         series.contains(where: \.hasTruncated)
@@ -500,7 +519,7 @@ struct LimitHistoryCard: View {
     private func seriesRow(_ entry: PhoneLimitHistorySeries) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(entry.label)
+                Text(group?.shortLabel(entry.label) ?? entry.label)
                     .font(.subheadline)
                 Text("last \(entry.windows.count)")
                     .font(.caption2)

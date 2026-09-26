@@ -534,6 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // 카드를 띄우고 빈 차트를 그린다.
             guard !summary.isEmpty else { continue }
             series.append(PhoneLimitHistorySeries(
+                providerID: "claude_code",
                 label: claudeLabels[window] ?? window,
                 windows: summary.windows.map {
                     PhoneLimitHistoryWindow(peak: $0.peak, end: $0.end, truncated: $0.truncated)
@@ -556,6 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                                           threshold: warnThreshold, limit: limit)
             guard !summary.isEmpty else { continue }
             series.append(PhoneLimitHistorySeries(
+                providerID: "antigravity",
                 label: agyLabels[window] ?? window,
                 windows: summary.windows.map {
                     PhoneLimitHistoryWindow(peak: $0.peak, end: $0.end, truncated: $0.truncated)

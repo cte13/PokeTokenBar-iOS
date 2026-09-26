@@ -272,6 +272,94 @@ struct PhonePayloadTests {
         #expect(none.isEmpty)
     }
 
+    // MARK: - Provider Tabs
+
+    private func history(_ label: String, providerID: String? = nil) -> PhoneLimitHistorySeries {
+        PhoneLimitHistorySeries(providerID: providerID, label: label,
+                                windows: [PhoneLimitHistoryWindow(peak: 50, end: Date(), truncated: false)],
+                                peak: 50, median: 50, atOrAbove: 0)
+    }
+
+    private func payload(providers: [String], limits: PhoneLimitStatus?) -> PhonePayload {
+        PhonePayload(todayTokens: 0, todayCost: 0, weekTokens: 0, monthTokens: 0,
+                     lastUpdated: Date(), serverVersion: "test", limits: limits, companion: nil,
+                     providers: providers.map { PhoneProviderSnapshot(id: $0, displayName: $0.uppercased(), todayTokens: 1, todayCost: 0) })
+    }
+
+    @Test func providerTabsKeepUsageOrderThenAppendLimitOnlyProviders() {
+        let limits = PhoneLimitStatus(
+            claude5h: PhoneLimitWindow(label: "Claude 5h", utilization: 50, resetsAt: nil),
+            claudeWeekly: nil, claudeOpusWeekly: nil, claudeSonnetWeekly: nil,
+            codexPrimary: PhoneLimitWindow(label: "Codex 5h", utilization: 20, resetsAt: nil),
+            codexSecondary: nil,
+            planDisplay: nil,
+            history: [history("Antigravity Gemini 5h", providerID: "antigravity")])
+        // Codex has usage today; Claude only has limits; Antigravity only has history.
+        let p = payload(providers: ["codex", "gemini"], limits: limits)
+        let tabs = p.providerTabs(isProviderVisible: { _ in true })
+        #expect(tabs.map(\.id) == ["codex", "gemini", "claude_code", "antigravity"])
+        // Usage providers keep the Mac's display name; limit-only ones come from ProviderMetadata.
+        #expect(tabs.map(\.displayName) == ["CODEX", "GEMINI", "Claude Code", "Antigravity"])
+
+        let hidden = p.providerTabs(isProviderVisible: { $0 != "claude_code" && $0 != "gemini" })
+        #expect(hidden.map(\.id) == ["codex", "antigravity"])
+    }
+
+    @Test func providerTabsWithoutLimitsAreUsageProvidersOnly() {
+        let tabs = payload(providers: ["claude_code"], limits: nil).providerTabs(isProviderVisible: { _ in true })
+        #expect(tabs.map(\.id) == ["claude_code"])
+    }
+
+    @Test func historySeriesFilteredByProviderID() {
+        let limits = PhoneLimitStatus(
+            claude5h: nil, claudeWeekly: nil, claudeOpusWeekly: nil, claudeSonnetWeekly: nil,
+            codexPrimary: nil, codexSecondary: nil, planDisplay: nil,
+            history: [history("Claude 5h", providerID: "claude_code"),
+                      history("Antigravity Claude & GPT 5h", providerID: "antigravity"),
+                      history("Claude Weekly", providerID: "claude_code")])
+        #expect(limits.historySeries(forProvider: "claude_code").map(\.label) == ["Claude 5h", "Claude Weekly"])
+        #expect(limits.historySeries(forProvider: "antigravity").map(\.label) == ["Antigravity Claude & GPT 5h"])
+        #expect(limits.historySeries(forProvider: "codex").isEmpty)
+    }
+
+    /// Macs that predate `providerID` sent labels only — including Antigravity's "Claude & GPT"
+    /// group, which must not be filed under Claude.
+    @Test func legacyHistoryWithoutProviderIDIsAttributedByLabel() throws {
+        let json = #"{"label":"Antigravity Claude & GPT 주간","windows":[],"peak":0,"median":0,"atOrAbove":0}"#
+        let legacy = try JSONDecoder().decode(PhoneLimitHistorySeries.self, from: Data(json.utf8))
+        #expect(legacy.providerID == nil)
+        #expect(legacy.resolvedProviderID == "antigravity")
+        #expect(history("Claude 5시간").resolvedProviderID == "claude_code")
+        #expect(history("Antigravity Gemini 5h").resolvedProviderID == "antigravity")
+        #expect(history("Something else").resolvedProviderID == nil)
+        // An explicit providerID wins over whatever the label says.
+        #expect(history("Claude & GPT", providerID: "claude_code").resolvedProviderID == "claude_code")
+    }
+
+    @Test func limitGroupsCarryProviderIDAndOnlyClaudeCarriesPlan() {
+        let limits = PhoneLimitStatus(
+            claude5h: PhoneLimitWindow(label: "Claude 5h", utilization: 50, resetsAt: nil),
+            claudeWeekly: nil, claudeOpusWeekly: nil, claudeSonnetWeekly: nil,
+            codexPrimary: PhoneLimitWindow(label: "Codex 5h", utilization: 20, resetsAt: nil),
+            codexSecondary: nil,
+            opencodeGo5h: PhoneLimitWindow(label: "Go 5h", utilization: 10, resetsAt: nil),
+            antigravity: [PhoneLimitWindow(label: "Antigravity Gemini 5h", utilization: 40, resetsAt: nil)],
+            planDisplay: "Max")
+        let groups = limits.limitGroups
+        #expect(groups.map(\.providerID) == ["claude_code", "codex", "opencode", "antigravity"])
+        #expect(groups.map(\.plan) == ["Max", nil, nil, nil])
+    }
+
+    @Test func groupShortLabelDropsOnlyTheBrandPrefix() {
+        let claude = PhoneLimitGroup(providerID: "claude_code", title: "Claude", windows: [])
+        #expect(claude.shortLabel("Claude Weekly") == "Weekly")
+        #expect(claude.shortLabel("Claude 5시간") == "5시간")
+        #expect(claude.shortLabel("Claude") == "Claude")
+        #expect(claude.shortLabel("Codex 5h") == "Codex 5h")
+        let agy = PhoneLimitGroup(providerID: "antigravity", title: "Antigravity", windows: [])
+        #expect(agy.shortLabel("Antigravity Gemini 5h") == "Gemini 5h")
+    }
+
     @Test func antigravityWindowsSorted5hBeforeWeeklyAndGeminiFirst() {
         let windows = [
             PhoneLimitWindow(label: "Antigravity Claude & GPT Weekly", utilization: 0.0, resetsAt: nil),

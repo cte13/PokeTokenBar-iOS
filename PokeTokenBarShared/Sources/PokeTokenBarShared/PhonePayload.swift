@@ -92,6 +92,25 @@ public struct PhonePayload: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Provider Tabs
+
+extension PhonePayload {
+    /// Providers the phone dashboard shows a tab for, mirroring the Mac popover's service tabs:
+    /// every visible provider with usage today (payload order), then any visible provider that only
+    /// has limits or limit history to show — a Claude quota is still worth seeing on a day with no
+    /// Claude tokens yet.
+    public func providerTabs(isProviderVisible: (String) -> Bool) -> [ProviderMetadata] {
+        var tabs = providers.map { ProviderMetadata(id: $0.id, displayName: $0.displayName) }
+        let limitOnly = (limits?.limitGroups.map(\.providerID) ?? [])
+            + (limits?.history ?? []).compactMap(\.resolvedProviderID)
+        for id in limitOnly where !tabs.contains(where: { $0.id == id }) {
+            let name = ProviderMetadata.allKnown.first(where: { $0.id == id })?.displayName ?? id
+            tabs.append(ProviderMetadata(id: id, displayName: name))
+        }
+        return tabs.filter { isProviderVisible($0.id) }
+    }
+}
+
 // MARK: - Limit Status
 
 public struct PhoneLimitStatus: Codable, Sendable, Equatable {
@@ -178,25 +197,25 @@ public struct PhoneLimitStatus: Codable, Sendable, Equatable {
             if let w = claudeOpusWeekly { claude.append(w) }
             if let w = claudeSonnetWeekly { claude.append(w) }
             claude.append(contentsOf: claudeScoped ?? [])
-            if !claude.isEmpty { out.append(PhoneLimitGroup(title: "Claude", windows: claude)) }
+            if !claude.isEmpty { out.append(PhoneLimitGroup(providerID: "claude_code", title: "Claude", windows: claude, plan: planDisplay)) }
         }
         if isProviderVisible("codex") {
             var codex: [PhoneLimitWindow] = []
             if let w = codexPrimary { codex.append(w) }
             if let w = codexSecondary { codex.append(w) }
-            if !codex.isEmpty { out.append(PhoneLimitGroup(title: "Codex", windows: codex)) }
+            if !codex.isEmpty { out.append(PhoneLimitGroup(providerID: "codex", title: "Codex", windows: codex)) }
         }
         if isProviderVisible("opencode") {
             var go: [PhoneLimitWindow] = []
             if let w = opencodeGo5h { go.append(w) }
             if let w = opencodeGoWeekly { go.append(w) }
             if let w = opencodeGoMonthly { go.append(w) }
-            if !go.isEmpty { out.append(PhoneLimitGroup(title: "Go", windows: go)) }
+            if !go.isEmpty { out.append(PhoneLimitGroup(providerID: "opencode", title: "Go", windows: go)) }
         }
         if isProviderVisible("antigravity") {
             if let agy = antigravity, !agy.isEmpty {
                 let sortedAgy = Self.sortAntigravityWindows(agy)
-                out.append(PhoneLimitGroup(title: "Antigravity", windows: sortedAgy))
+                out.append(PhoneLimitGroup(providerID: "antigravity", title: "Antigravity", windows: sortedAgy))
             }
         }
         return out
@@ -219,6 +238,12 @@ public struct PhoneLimitStatus: Codable, Sendable, Equatable {
         }
     }
 
+    /// History series belonging to one provider, in payload order. Series from Macs that predate
+    /// `PhoneLimitHistorySeries.providerID` are attributed by their label instead.
+    public func historySeries(forProvider providerID: String) -> [PhoneLimitHistorySeries] {
+        (history ?? []).filter { $0.resolvedProviderID == providerID }
+    }
+
     /// Colour tier for a utilization value using the Mac's thresholds.
     public func tier(for utilization: Double) -> PhoneLimitTier {
         if utilization >= effectiveCritThreshold { return .critical }
@@ -233,12 +258,27 @@ public enum PhoneLimitTier: Sendable, Equatable {
 
 /// 한 프로바이더의 한도 창 묶음 — 제목(브랜드명, 위젯 그룹 헤더)과 orderedWindows 순서 창들.
 public struct PhoneLimitGroup: Sendable, Equatable {
+    /// Usage provider this group belongs to (`PhoneProviderSnapshot.id`), so the phone can file
+    /// the group under that provider's tab.
+    public let providerID: String
     public let title: String
     public let windows: [PhoneLimitWindow]
+    /// Subscription tier shown beside the group (`PhoneLimitStatus.planDisplay` is Claude's plan).
+    public let plan: String?
 
-    public init(title: String, windows: [PhoneLimitWindow]) {
+    public init(providerID: String, title: String, windows: [PhoneLimitWindow], plan: String? = nil) {
+        self.providerID = providerID
         self.title = title
         self.windows = windows
+        self.plan = plan
+    }
+
+    /// Window label without the repeated brand prefix ("Claude Weekly" → "Weekly") for rows that
+    /// already sit under this group's name. Mac labels are "<title> <window>" in every language.
+    public func shortLabel(_ label: String) -> String {
+        guard label.hasPrefix(title + " ") else { return label }
+        let trimmed = String(label.dropFirst(title.count + 1))
+        return trimmed.isEmpty ? label : trimmed
     }
 }
 
@@ -293,6 +333,9 @@ public struct PhoneLimitHistoryWindow: Codable, Sendable, Equatable {
 /// that ships in this payload, so the phone can render the count and the threshold together
 /// without recomputing either — recomputing is how the two drift apart.
 public struct PhoneLimitHistorySeries: Codable, Sendable, Equatable {
+    /// Usage provider the series was recorded for (`PhoneProviderSnapshot.id`). nil from Macs that
+    /// predate the field — use `resolvedProviderID`, which falls back to the label.
+    public let providerID: String?
     /// Mac-localized, matching the live limit row above it (same convention as `PhoneLimitWindow`).
     public let label: String
     public let windows: [PhoneLimitHistoryWindow]
@@ -300,8 +343,9 @@ public struct PhoneLimitHistorySeries: Codable, Sendable, Equatable {
     public let median: Double
     public let atOrAbove: Int
 
-    public init(label: String, windows: [PhoneLimitHistoryWindow],
+    public init(providerID: String? = nil, label: String, windows: [PhoneLimitHistoryWindow],
                 peak: Double, median: Double, atOrAbove: Int) {
+        self.providerID = providerID
         self.label = label
         self.windows = windows
         self.peak = peak
@@ -312,6 +356,19 @@ public struct PhoneLimitHistorySeries: Codable, Sendable, Equatable {
     /// Any window whose peak is only a lower bound — the phone says so rather than presenting a
     /// hole as a fact.
     public var hasTruncated: Bool { windows.contains(where: \.truncated) }
+
+    /// `providerID`, or — for older Macs that only sent a localized label — the provider the label
+    /// names. Only Claude and Antigravity have ever been recorded, and Antigravity's third-party
+    /// group ("Claude & GPT") also contains "Claude", so Antigravity is matched first.
+    public var resolvedProviderID: String? {
+        if let providerID { return providerID }
+        let isAntigravity = label.localizedCaseInsensitiveContains("gemini")
+            || label.localizedCaseInsensitiveContains("antigravity")
+            || (label.localizedCaseInsensitiveContains("claude") && label.localizedCaseInsensitiveContains("gpt"))
+        if isAntigravity { return "antigravity" }
+        if label.localizedCaseInsensitiveContains("claude") { return "claude_code" }
+        return nil
+    }
 }
 
 // MARK: - Companion State

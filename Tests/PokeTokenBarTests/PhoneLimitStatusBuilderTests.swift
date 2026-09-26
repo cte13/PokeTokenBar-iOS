@@ -187,6 +187,7 @@ final class PhoneLimitStatusBuilderTests: XCTestCase {
 
         XCTAssertEqual(series.count, 1, "seven_day 는 기록이 없어 시리즈를 만들지 않는다")
         XCTAssertEqual(series[0].label, "Claude 5h")
+        XCTAssertEqual(series[0].providerID, "claude_code", "폰이 라벨이 아니라 ID 로 프로바이더 탭에 배치한다")
         XCTAssertEqual(series[0].windows.map(\.peak), [92, 40], "오래된 창이 먼저")
         XCTAssertEqual(series[0].peak, 92)
         XCTAssertEqual(series[0].atOrAbove, 1, "warnThreshold 80 이상은 92 하나")
@@ -255,6 +256,7 @@ final class PhoneLimitStatusBuilderTests: XCTestCase {
         let series = AppDelegate.phoneLimitHistory(store, warnThreshold: 80, l: L(.en))
         XCTAssertEqual(series.count, 1)
         XCTAssertEqual(series[0].label, "Antigravity Gemini 5h")
+        XCTAssertEqual(series[0].providerID, "antigravity")
         XCTAssertEqual(series[0].windows.map(\.peak), [60, 45])
     }
 }

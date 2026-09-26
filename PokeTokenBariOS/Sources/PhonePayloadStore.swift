@@ -72,11 +72,6 @@ final class PhonePayloadStore {
         }
     }
 
-    var visibleProviders: [PhoneProviderSnapshot] {
-        guard let providers = payload?.providers else { return [] }
-        return providers.filter { isProviderVisible($0.id) }
-    }
-
     var configurableProviders: [ProviderMetadata] {
         var result = ProviderMetadata.allKnown
         if let payloadProviders = payload?.providers {

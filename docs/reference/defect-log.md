@@ -41,6 +41,17 @@ read_when:
   — 옛 6h 규칙·하락 분기 제거를 각각 주입해 실패 확인. 남은 사각: 창보다 짧은 공백이 리셋을 걸치고
   새 창 사용이 옛 값을 넘으면 한 창으로 읽힌다(`resets_at` 은 rolling 주간에서 매 fetch 마다 움직여 키가 못 된다).
 
+- **"앱이 꺼져 있었다"의 임계값은 기록 주기(heartbeat)가 아니라 관측 중 최대 행 간격이다.** 위 수정이
+  하락 규칙을 `gap > heartbeat`(15분)에 걸었는데, 사용률이 멈춰 있으면 행은 heartbeat 가 지난 *다음
+  폴링*에만 쓰이고 폴링 주기는 사용자 설정 최대 15분이라, 앱이 계속 켜져 있어도 행 간격이 ~30분이 된다.
+  그래서 10·15분 주기 사용자가 **실시간으로 본 리셋**이 "Mac 꺼짐"으로 흐리게 표시됐다. 이제
+  `LimitHistoryStore.maxObservedGap` = heartbeat + 가장 느린 `UsageStore.intervalPresets` + 여유 5분이며
+  프리셋에서 파생된다. 테스트가 못 거른 이유: 위 수정은 `LimitHistoryTests` 만 돌렸고, 30분 간격 픽스처로
+  이 결함을 그대로 밟던 `PhoneLimitStatusBuilderTests` 2건이 main 에서 실패한 채 머지됐다 — 포크의 CI 가
+  한 번도 실행된 적이 없어(Actions 실행 0건) 게이트가 없었다. 회귀 가드:
+  `testResetWatchedAtTheSlowestRefreshIsNotDimmed`(옛 임계값 주입 시 실패 확인),
+  `testObservedGapCoversTheSlowestRefreshPreset`(더 느린 프리셋 추가 시 실패).
+
 - **Species ownership is not an individual's appearance.** A species-level shiny flag means
   at least one shiny was collected; using it for the selected individual's badge mislabeled
   normal catches, and earlier evolution pages offered no way to choose their normal appearance.

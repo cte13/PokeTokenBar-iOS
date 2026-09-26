@@ -236,11 +236,12 @@ final class PhoneLimitStatusBuilderTests: XCTestCase {
 
     /// 관측 공백(앱 미실행)이 섞인 창은 그 사실을 폰까지 들고 가야 한다 — 최고치가 하한이라는 뜻이다.
     func testTruncatedWindowsSurviveToThePhone() {
-        // 6시간 초과 간격 = 관측 공백 → 양쪽 창이 truncated 로 표시된다.
+        // 5시간 창보다 긴 간격 = 공백 안에 리셋 → 공백 *앞* 창만 truncated. 재개한 창은 누적값이라
+        // 첫 샘플이 이미 전부를 담아 정확하다(LimitHistoryStore.windows(from:) 참고).
         let store = historyStore([("five_hour", 20), ("five_hour", 70)], spacing: 12 * 3600)
         let series = AppDelegate.phoneLimitHistory(store, warnThreshold: 80, l: L(.en))
         XCTAssertTrue(series[0].hasTruncated)
-        XCTAssertEqual(series[0].windows.filter(\.truncated).count, series[0].windows.count)
+        XCTAssertEqual(series[0].windows.map(\.truncated), [true, false])
     }
 
     func testPhoneHistoryCarriesAntigravitySeries() {

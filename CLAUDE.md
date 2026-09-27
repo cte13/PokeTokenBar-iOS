@@ -13,6 +13,7 @@
 | `docs/reference/provider-extension.md` | 새 사용량 소스·버전매니저·로그 루트를 추가할 때, 프로바이더 분기를 리뷰할 때 |
 | `docs/reference/defect-log.md` | 결함·회귀를 고치는 중(부류 스윕 근거), 동시성·캐시·외부 로그 포맷·대용량 파일 읽기·상시 애니메이션·세이브 이전을 건드릴 때 |
 | `docs/reference/ios-device-deploy.md` | 사용자가 iOS 앱을 아이폰에 올려달라고 할 때 ("폰에 푸시해줘", "폰에 올려줘" 등) |
+| `docs/reference/cloud-session-sync-handoff.md` | 클라우드 세션 사용량 동기화 작업(`claude/cloud-token-usage-t5wnk6`)을 이어받을 때 — 남은 작업·와이어 포맷·셋업 (in-progress handoff) |
 
 각 문서의 frontmatter(`summary`/`read_when`)가 그 문서의 적용 범위를 다시 명시한다.
 

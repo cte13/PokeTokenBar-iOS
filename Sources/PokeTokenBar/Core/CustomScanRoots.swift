@@ -80,7 +80,8 @@ enum CustomScanRoots {
         switch providerID {
         case "claude_code":
             return LocalUsageReader.computeClaudeProjectRoots(
-                customRootsValue: nil, accountRoots: ClaudeAccountRoots.installedAccountRoots())
+                customRootsValue: nil, accountRoots: ClaudeAccountRoots.installedAccountRoots(),
+                cloudSessionsRoot: CloudSessionMirror.defaultRoot())
         case "codex":
             return LocalUsageReader.codexSessionRoots(customRootsValue: nil)
         case "gemini":

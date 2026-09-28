@@ -1,4 +1,5 @@
 import SwiftUI
+import PokeTokenBarShared
 import UniformTypeIdentifiers
 
 @MainActor
@@ -39,6 +40,10 @@ struct SettingsView: View {
     @State private var additionalAccountsDraft = ""
     @FocusState private var additionalAccountsFocused: Bool
     @FocusState private var sessionKeyFocused: Bool
+    @State private var cloudSecretInput = ""
+    @State private var cloudSecretConfigured = CloudSessionSecretStore().load() != nil
+    @State private var cloudSecretInvalid = false
+    @State private var cloudSessionsLastPull: Date?
     private var l: L { companion.l }
 
     private var isBundledApp: Bool { AppEnv.isBundledApp }
@@ -76,6 +81,7 @@ struct SettingsView: View {
                         menuBarGroup(store)
                         floatingPetGroup(store)
                         phoneServerGroup(store)
+                        cloudSessionsGroup(store)
                         notificationsGroup(store)
                         updateGroup(store)
                         transferGroup(store)
@@ -341,6 +347,77 @@ struct SettingsView: View {
         }
     }
 
+    /// Claude Code on the web: the secret shared with the cloud-environment hook. Once saved it is
+    /// never shown again (copy only), like the session key above.
+    @ViewBuilder
+    private func cloudSessionsGroup(_ store: UsageStore) -> some View {
+        settingsSection(l.cloudSessionsSectionTitle) {
+            groupRow {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(l.cloudSessionsSecretLabel)
+                    Text(l.cloudSessionsHint).font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if cloudSecretConfigured {
+                    Text(l.cloudSessionsConfigured).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            if cloudSecretConfigured {
+                groupRow {
+                    if let last = cloudSessionsLastPull {
+                        Text(l.cloudSessionsLastPull(last.formatted(.relative(presentation: .named))))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Button(l.cloudSessionsCopy) {
+                        guard let raw = CloudSessionSecretStore().loadRaw() else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(raw, forType: .string)
+                    }
+                    .controlSize(.small)
+                    Button(l.cloudSessionsRemove) {
+                        CloudSessionSettings.clear()
+                        cloudSecretConfigured = false
+                    }
+                    .controlSize(.small)
+                }
+            } else {
+                groupRow {
+                    SecureField(l.cloudSessionsSecretPlaceholder, text: $cloudSecretInput)
+                        .textFieldStyle(.roundedBorder).controlSize(.small)
+                    Button(l.cloudSessionsGenerate) {
+                        cloudSecretInput = CloudSessionCrypto.generateSecret()
+                        saveCloudSecret(store)
+                    }
+                    .controlSize(.small)
+                    Button(l.cloudSessionsSave) { saveCloudSecret(store) }
+                        .controlSize(.small)
+                        .disabled(cloudSecretInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if cloudSecretInvalid {
+                    Text(l.cloudSessionsInvalidSecret).font(.caption2).foregroundStyle(.red)
+                        .padding(.horizontal, 12).padding(.bottom, 8)
+                }
+            }
+        }
+        .task(id: cloudSecretConfigured) {
+            cloudSessionsLastPull = await CloudSessionMirror.shared.lastPull()
+        }
+    }
+
+    private func saveCloudSecret(_ store: UsageStore) {
+        do {
+            try CloudSessionSettings.save(cloudSecretInput)
+            cloudSecretInput = ""
+            cloudSecretInvalid = false
+            cloudSecretConfigured = true
+            Task { await store.refresh() }
+        } catch {
+            cloudSecretInvalid = true
+        }
+    }
 
     @ViewBuilder
     private func floatingPetGroup(_ store: UsageStore) -> some View {

@@ -18,6 +18,12 @@ struct LocalClaudeProvider: UsageProvider {
             modifiedSince: LocalUsageReader.enrichmentScanStart(now: now))
         return .local(entries: entries, now: now)
     }
+
+    /// Claude is in the phone ledger — the provider cloud sessions add to (owner decision
+    /// 2026-09-28: Claude only for now). Same scan window as `fetchEnrichment`.
+    func phoneLedgerEntries(now: Date) async -> [LocalUsageReader.Entry]? {
+        await LocalUsageCache.shared.claudeEntries(modifiedSince: LocalUsageReader.enrichmentScanStart(now: now))
+    }
 }
 
 /// 로컬 로그 직접 파싱 기반 Gemini CLI provider.

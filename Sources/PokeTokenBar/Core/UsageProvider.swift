@@ -1,4 +1,5 @@
 import Foundation
+import PokeTokenBarShared
 
 /// provider 확장 포인트 — 새 소스(Gemini/OpenCode 등)는 이 protocol 구현체 추가만으로 확장
 protocol UsageProvider: Sendable {
@@ -14,56 +15,19 @@ protocol UsageProvider: Sendable {
 
     /// 블록/주월 누적 상세 (best effort) — 느리거나 실패해도 메뉴바 숫자에 영향 없음.
     func fetchEnrichment() async -> ProviderEnrichment
+
+    /// Opt-in: every entry in the enrichment window, for the iPhone's usage ledger
+    /// (`PhoneLedgerPublisher`), so the phone can count this provider with the Mac off.
+    /// nil (the default) keeps the provider out of the ledger — the phone then shows the Mac's
+    /// last numbers for it. Adding a provider to the ledger is implementing this, nothing else.
+    func phoneLedgerEntries(now: Date) async -> [LocalUsageReader.Entry]?
 }
 
 extension UsageProvider {
     var reportsCost: Bool { true }
+    func phoneLedgerEntries(now: Date) async -> [LocalUsageReader.Entry]? { nil }
 }
 
-/// 부가 정보 수집 결과. *OK 플래그가 false 면 수집 실패 → 이전 값 유지.
-struct ProviderEnrichment: Sendable {
-    var activeBlock: BlockUsage?
-    var blocksOK = false
-    var weekTotal: PeriodUsage?
-    var monthTotal: PeriodUsage?
-    /// Day-by-day totals for the current month (month start → today, empty days as zeros).
-    /// Comes out of the same scan as `monthTotal` and is gated by the same `periodsOK`.
-    /// `nil` means this provider cannot produce a series; aggregation uses available providers.
-    var monthDaily: [DailyUsage]?
-    var periodsOK = false
-}
-
-extension ProviderEnrichment {
-    /// Assembles the whole enrichment — active block, this week, this month, this month's daily
-    /// series — from one already-loaded set of entries.
-    ///
-    /// Every local provider shares this one site. The assembly used to be copied per provider
-    /// (twelve near-identical bodies), which is the shape the defect log warns about for the
-    /// append-only watermark loop (#157): a field added later gets filled in some copies and not
-    /// others, and the gap is invisible in a dev environment that does not use that provider.
-    ///
-    static func local(entries: [LocalUsageReader.Entry], now: Date = Date()) -> ProviderEnrichment {
-        let fmt = LocalUsageReader.localDayFormatter()
-        let weekStart = LocalUsageReader.startOfWeek(now)
-        let monthStart = LocalUsageReader.startOfMonth(now)
-
-        var result = ProviderEnrichment()
-        // Block (burn rate) computation is provider-generic — the companion rhythm follows all providers.
-        result.activeBlock = LocalUsageReader.activeBlock(entries: entries, now: now)
-        result.blocksOK = true
-
-        let week = LocalUsageReader.period(
-            entries: entries, periodKey: fmt.string(from: weekStart),
-            fromDay: fmt.string(from: weekStart), toDay: fmt.string(from: now))
-        let month = LocalUsageReader.period(
-            entries: entries, periodKey: LocalUsageReader.monthKey(now),
-            fromDay: fmt.string(from: monthStart), toDay: fmt.string(from: now))
-        let series = LocalUsageReader.monthDailySeries(entries: entries, now: now)
-
-        result.weekTotal = week
-        result.monthTotal = month
-        result.monthDaily = series
-        result.periodsOK = true
-        return result
-    }
-}
+/// 부가 정보 수집 결과 — the struct and its one assembly site (`ProviderEnrichment.local`) live in
+/// PokeTokenBarShared so the iPhone assembles its ledger count the same way.
+typealias ProviderEnrichment = PokeTokenBarShared.ProviderEnrichment

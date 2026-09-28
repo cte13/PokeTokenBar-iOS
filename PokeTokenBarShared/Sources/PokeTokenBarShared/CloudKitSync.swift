@@ -12,7 +12,7 @@ public enum CloudKitSync {
     /// Process-lifetime container. Short-lived CKContainer instances can tear down the
     /// cloudd client session while operations are still pending ("Client went away before
     /// operation could be validated"), so the container must outlive every operation.
-    private static let container = CKContainer(identifier: containerID)
+    static let container = CKContainer(identifier: containerID)
 
     // MARK: - Write
 

@@ -451,11 +451,29 @@ public struct PhoneProviderSnapshot: Codable, Sendable, Equatable {
     public let cacheWriteTokens: Int
     public let cacheReadTokens: Int
     public let reportsCost: Bool
+    /// This provider's own week / month / burn / daily series. The phone needs the per-provider
+    /// split to recount some providers from the usage ledger while keeping the Mac's numbers for
+    /// the rest (`PhoneLedgerOverlay`). nil from Macs that predate the fields.
+    public let weekTokens: Int?
+    public let weekCost: Double?
+    public let monthTokens: Int?
+    public let monthCost: Double?
+    public let tokensPerMinute: Double?
+    public let monthDaily: [PhoneDailyTrend]?
 
     public init(id: String, displayName: String, todayTokens: Int, todayCost: Double,
                 inputTokens: Int = 0, outputTokens: Int = 0,
                 cacheWriteTokens: Int = 0, cacheReadTokens: Int = 0,
-                reportsCost: Bool = true) {
+                reportsCost: Bool = true,
+                weekTokens: Int? = nil, weekCost: Double? = nil,
+                monthTokens: Int? = nil, monthCost: Double? = nil,
+                tokensPerMinute: Double? = nil, monthDaily: [PhoneDailyTrend]? = nil) {
+        self.weekTokens = weekTokens
+        self.weekCost = weekCost
+        self.monthTokens = monthTokens
+        self.monthCost = monthCost
+        self.tokensPerMinute = tokensPerMinute
+        self.monthDaily = monthDaily
         self.id = id
         self.displayName = displayName
         self.todayTokens = todayTokens

@@ -1,0 +1,265 @@
+import Foundation
+import PokeTokenBarShared
+
+// Counting Claude Code on the web, and counting on the iPhone with the Mac off.
+//
+// - Cloud sessions run in disposable containers; a hook there (`scripts/cloud-session-sync`)
+//   uploads encrypted, usage-only transcript chunks to the public CloudKit database.
+//   `CloudSessionMirror` pulls them and writes each chunk as a transcript file under a folder that
+//   `LocalUsageReader` scans as a Claude root, so every Mac number (totals, burn, companion)
+//   includes cloud work with no special casing.
+// - `PhoneLedgerPublisher` uploads this Mac's own entries to the private database so the phone
+//   can count on its own (`PhoneLedgerOverlay`).
+// Every CloudKit call goes through `CloudSyncGate`.
+
+/// The shared secret for cloud-session records (`PTB_SYNC_SECRET` in the cloud environment).
+/// A 0600 file beside `session-key.json`, not Keychain — `CredentialFileProtection` explains why.
+struct CloudSessionSecretStore: Sendable {
+    let fileURL: URL
+
+    init(fileURL: URL? = nil) {
+        self.fileURL = fileURL ?? AppStatePaths.directory().appendingPathComponent("cloud-session-secret.txt")
+    }
+
+    func load() -> CloudSessionCrypto? {
+        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+        return try? CloudSessionCrypto(base64Secret: text)
+    }
+
+    func loadRaw() -> String? {
+        (try? String(contentsOf: fileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Rejects anything that is not base64 of 32 bytes, so a paste error surfaces in Settings
+    /// instead of as silently undecryptable records.
+    func save(_ base64Secret: String) throws {
+        let trimmed = base64Secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try CloudSessionCrypto(base64Secret: trimmed)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: fileURL)
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil,
+                                       attributes: [.posixPermissions: NSNumber(value: Int16(0o600))])
+        try Data(trimmed.utf8).write(to: fileURL, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: fileURL.path)
+        CredentialFileProtection.excludeFromBackup(fileURL)
+    }
+
+    func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
+/// Mirrors cloud-session records into `<state>/cloud-sessions/c<chunk>/<rel>`.
+///
+/// The `c<chunk>/` prefix keeps each chunk a separate file while leaving the tail of the path in
+/// the shape `claudeSessionID(forTranscript:)` reads (`<project>/<session>.jsonl`,
+/// `<project>/<session>/subagents/<agent>.jsonl`), so chunks of one session share its session id.
+actor CloudSessionMirror {
+    static let shared = CloudSessionMirror()
+
+    /// `updatedAt` is the container's clock, not CloudKit's. Re-reading a window behind the
+    /// watermark covers skew; rewriting an unchanged file is skipped, and dedup covers the rest.
+    static let overlap: TimeInterval = 10 * 60
+    /// First pull reaches back this far — past the month window every total is built from.
+    static let initialLookback: TimeInterval = 40 * 24 * 3600
+
+    typealias Fetch = @Sendable (_ channel: String, _ since: Date) async throws -> [UsageCloudKit.CloudSessionRecord]
+
+    struct Outcome: Equatable {
+        var written = 0
+        var rejected = 0
+    }
+
+    private let root: URL
+    private let fetch: Fetch
+    private var inFlight = false
+
+    init(root: URL = CloudSessionMirror.defaultRoot(),
+         fetch: @escaping Fetch = { try await CloudSyncGate.fetchCloudSessionRecords(channel: $0, since: $1) }) {
+        self.root = root
+        self.fetch = fetch
+    }
+
+    static func defaultRoot() -> URL { AppStatePaths.directory().appendingPathComponent("cloud-sessions") }
+
+    /// Pulls records newer than the watermark and writes the changed ones. Returns nil when a pull
+    /// is already running or the fetch failed (logged), otherwise how many files changed.
+    func pull(crypto: CloudSessionCrypto, now: Date = Date()) async -> Outcome? {
+        guard !inFlight else { return nil }
+        inFlight = true
+        defer { inFlight = false }
+
+        var state = loadState(channel: crypto.channel)
+        let since = state.watermark.map { $0.addingTimeInterval(-Self.overlap) }
+            ?? now.addingTimeInterval(-Self.initialLookback)
+        let records: [UsageCloudKit.CloudSessionRecord]
+        do {
+            records = try await fetch(crypto.channel, since)
+        } catch {
+            AppLog.writeIfChanged("cloud-session-pull", "cloud sessions: pull failed: \(error)")
+            return nil
+        }
+        var outcome = Outcome()
+        for record in records {
+            do {
+                if try write(try crypto.open(record.payload)) { outcome.written += 1 }
+                state.watermark = max(state.watermark ?? record.updatedAt, record.updatedAt)
+            } catch {
+                // A record we cannot open is not ours (wrong secret, or someone else's channel
+                // collision) — skip it but still advance past it.
+                outcome.rejected += 1
+                state.watermark = max(state.watermark ?? record.updatedAt, record.updatedAt)
+            }
+        }
+        state.lastPull = now
+        saveState(state)
+        if outcome.written > 0 || outcome.rejected > 0 {
+            AppLog.write("cloud sessions: \(records.count) record(s), \(outcome.written) file(s) updated, \(outcome.rejected) rejected")
+        }
+        return outcome
+    }
+
+    /// Writes the chunk if its bytes changed. `rel` was validated by `CloudSessionCrypto.open`;
+    /// the containment check here is the second line of defence for a path from a public record.
+    func write(_ payload: CloudSessionPayload) throws -> Bool {
+        let base = root.standardizedFileURL
+        let file = base.appendingPathComponent("c\(payload.chunk)").appendingPathComponent(payload.rel)
+            .standardizedFileURL
+        guard file.path.hasPrefix(base.path + "/") else { throw CloudSessionCrypto.Failure.unsafePath }
+        let data = Data(payload.jsonl.utf8)
+        if (try? Data(contentsOf: file)) == data { return false }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file, options: .atomic)
+        return true
+    }
+
+    // MARK: State (hidden file: `jsonlFiles` skips it, and it is not `.jsonl` anyway)
+
+    struct State: Codable, Equatable {
+        var channel: String
+        var watermark: Date?
+        var lastPull: Date?
+    }
+
+    private var stateURL: URL { root.appendingPathComponent(".state.json") }
+
+    /// A different secret means a different channel: start over rather than skip its history.
+    private func loadState(channel: String) -> State {
+        guard let data = try? Data(contentsOf: stateURL),
+              let state = try? JSONDecoder().decode(State.self, from: data),
+              state.channel == channel else { return State(channel: channel) }
+        return state
+    }
+
+    private func saveState(_ state: State) {
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
+    }
+
+    func lastPull() -> Date? {
+        guard let data = try? Data(contentsOf: stateURL) else { return nil }
+        return (try? JSONDecoder().decode(State.self, from: data))?.lastPull
+    }
+}
+
+/// Publishes this Mac's entries for providers that opt in (`UsageProvider.phoneLedgerEntries`)
+/// to the private database, uploading only chunks whose digest changed.
+actor PhoneLedgerPublisher {
+    static let shared = PhoneLedgerPublisher()
+
+    typealias Publish = @Sendable (_ chunks: [PhoneUsageLedger.Chunk], _ deleting: [String],
+                                   _ manifest: PhoneUsageLedgerManifest) async throws -> Void
+
+    struct Source: Sendable {
+        let provider: PhoneUsageLedgerManifest.Provider
+        let entries: [LocalUsageReader.Entry]
+    }
+
+    private let stateURL: URL
+    private let upload: Publish
+    private var inFlight = false
+
+    init(stateURL: URL = AppStatePaths.directory().appendingPathComponent("phone-ledger-manifest.json"),
+         upload: @escaping Publish = { try await CloudSyncGate.publishLedger(chunks: $0, deleting: $1, manifest: $2) }) {
+        self.stateURL = stateURL
+        self.upload = upload
+    }
+
+    /// Returns how many chunks were uploaded, or nil when nothing was attempted (in flight,
+    /// unchanged) or the upload failed. A failure leaves the saved manifest untouched, so the
+    /// next refresh retries the same chunks.
+    @discardableResult
+    func publish(_ sources: [Source], now: Date = Date()) async -> Int? {
+        guard !inFlight else { return nil }
+        inFlight = true
+        defer { inFlight = false }
+
+        var chunks: [PhoneUsageLedger.Chunk] = []
+        do {
+            for source in sources {
+                chunks += try PhoneUsageLedger.chunks(provider: source.provider.id, entries: source.entries)
+            }
+        } catch {
+            AppLog.writeIfChanged("phone-ledger", "phone ledger: encoding failed: \(error)")
+            return nil
+        }
+        let manifest = PhoneUsageLedgerManifest(updatedAt: now, providers: sources.map(\.provider), chunks: chunks)
+        let previous = loadManifest()
+        let previousDigests = Dictionary((previous?.records ?? []).map { ($0.name, $0.digest) }, uniquingKeysWith: { a, _ in a })
+        let changed = chunks.filter { previousDigests[$0.recordName] != $0.digest }
+        let current = Set(chunks.map(\.recordName))
+        let removed = (previous?.records ?? []).map(\.name).filter { !current.contains($0) }
+        // A first run with nothing to publish stays silent — no empty manifest from a Mac that
+        // never published (and no CloudKit call from test stores with stub providers).
+        guard !changed.isEmpty || !removed.isEmpty || (previous?.providers ?? []) != manifest.providers else { return nil }
+
+        do {
+            try await upload(changed, removed, manifest)
+        } catch {
+            AppLog.writeIfChanged("phone-ledger", "phone ledger: upload failed: \(error)")
+            return nil
+        }
+        saveManifest(manifest)
+        AppLog.writeIfChanged("phone-ledger", "phone ledger: published \(changed.count) chunk(s), removed \(removed.count)")
+        return changed.count
+    }
+
+    private func loadManifest() -> PhoneUsageLedgerManifest? {
+        guard let data = try? Data(contentsOf: stateURL) else { return nil }
+        return try? JSONDecoder().decode(PhoneUsageLedgerManifest.self, from: data)
+    }
+
+    private func saveManifest(_ manifest: PhoneUsageLedgerManifest) {
+        try? JSONEncoder().encode(manifest).write(to: stateURL, options: .atomic)
+    }
+}
+
+/// Settings actions for the cloud-session secret. Saving also writes it to the private database,
+/// which is how the iPhone and its widget get it with no step on the phone.
+@MainActor
+enum CloudSessionSettings {
+    static func save(_ secret: String, store: CloudSessionSecretStore = CloudSessionSecretStore()) throws {
+        try store.save(secret)
+        publish(store: store)
+    }
+
+    static func clear(store: CloudSessionSecretStore = CloudSessionSecretStore()) {
+        store.clear()
+        Task {
+            do { try await CloudSyncGate.deleteCloudSessionSecret() }
+            catch { AppLog.write("cloud sessions: secret delete failed: \(error)") }
+        }
+    }
+
+    /// Also run at launch: a secret saved by a build without the iCloud entitlement, or while
+    /// offline, still reaches the phone once this Mac can sync.
+    static func publish(store: CloudSessionSecretStore = CloudSessionSecretStore()) {
+        guard let raw = store.loadRaw(), store.load() != nil else { return }
+        Task {
+            do { try await CloudSyncGate.saveCloudSessionSecret(raw) }
+            catch { AppLog.writeIfChanged("cloud-session-secret", "cloud sessions: secret sync failed: \(error)") }
+        }
+    }
+}

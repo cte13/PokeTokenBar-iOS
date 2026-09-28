@@ -364,6 +364,35 @@ struct L {
     // MARK: 플로팅 펫
     var floatingPetSectionTitle: String { t("플로팅 펫", "Floating Pet", "フローティングペット", "Mascota flotante", "Compagnon flottant", "Mascote flutuante", "Schwebendes Pokémon") }
     var floatingPetEnableLabel: String { t("플로팅 펫 표시", "Show floating pet", "フローティングペットを表示", "Mostrar mascota flotante", "Afficher le compagnon flottant", "Mostrar mascote flutuante", "Schwebendes Pokémon anzeigen") }
+    // Claude Code on the web (cloud-session sync) — fork-only strings, German falls back to English.
+    var cloudSessionsSectionTitle: String { t("웹의 Claude Code", "Claude Code on the web", "Web 版 Claude Code", "Claude Code en la web", "Claude Code sur le web", "Claude Code na web") }
+    var cloudSessionsHint: String {
+        t("클라우드 세션의 사용량을 셉니다. 클라우드 환경의 PTB_SYNC_SECRET 에 같은 비밀값을 넣으세요. iPhone 은 iCloud 로 자동으로 받습니다.",
+          "Counts usage from cloud sessions. Put the same secret in the cloud environment's PTB_SYNC_SECRET. Your iPhone gets it through iCloud automatically.",
+          "クラウドセッションの使用量を数えます。クラウド環境の PTB_SYNC_SECRET に同じシークレットを設定してください。iPhone には iCloud で自動的に届きます。",
+          "Cuenta el uso de las sesiones en la nube. Pon el mismo secreto en PTB_SYNC_SECRET del entorno en la nube. Tu iPhone lo recibe por iCloud automáticamente.",
+          "Compte l'utilisation des sessions cloud. Mettez le même secret dans PTB_SYNC_SECRET de l'environnement cloud. Votre iPhone le reçoit automatiquement via iCloud.",
+          "Conta o uso das sessões na nuvem. Coloque o mesmo segredo em PTB_SYNC_SECRET do ambiente na nuvem. Seu iPhone o recebe pelo iCloud automaticamente.")
+    }
+    var cloudSessionsSecretLabel: String { t("공유 비밀값", "Shared secret", "共有シークレット", "Secreto compartido", "Secret partagé", "Segredo compartilhado") }
+    var cloudSessionsSecretPlaceholder: String { t("base64 32바이트", "base64, 32 bytes", "base64・32 バイト", "base64, 32 bytes", "base64, 32 octets", "base64, 32 bytes") }
+    var cloudSessionsGenerate: String { t("새로 만들기", "Generate", "生成", "Generar", "Générer", "Gerar") }
+    var cloudSessionsSave: String { t("저장", "Save", "保存", "Guardar", "Enregistrer", "Salvar") }
+    var cloudSessionsCopy: String { t("복사", "Copy", "コピー", "Copiar", "Copier", "Copiar") }
+    var cloudSessionsRemove: String { t("제거", "Remove", "削除", "Quitar", "Supprimer", "Remover") }
+    var cloudSessionsConfigured: String { t("설정됨", "Configured", "設定済み", "Configurado", "Configuré", "Configurado") }
+    var cloudSessionsInvalidSecret: String {
+        t("base64 로 인코딩한 32바이트여야 합니다 (openssl rand -base64 32).",
+          "Must be 32 bytes encoded as base64 (openssl rand -base64 32).",
+          "base64 でエンコードした 32 バイトである必要があります (openssl rand -base64 32)。",
+          "Debe ser de 32 bytes codificados en base64 (openssl rand -base64 32).",
+          "Doit faire 32 octets encodés en base64 (openssl rand -base64 32).",
+          "Deve ter 32 bytes codificados em base64 (openssl rand -base64 32).")
+    }
+    func cloudSessionsLastPull(_ relative: String) -> String {
+        t("마지막 확인 \(relative)", "Last checked \(relative)", "最終確認 \(relative)", "Última comprobación \(relative)", "Dernière vérification \(relative)", "Última verificação \(relative)")
+    }
+
     var phoneServerSectionTitle: String { t("iPhone 연결", "iPhone Connection", "iPhone 接続", "Conexión con iPhone", "Connexion iPhone", "Conexão com iPhone") }
     var phoneServerEnableLabel: String { t("아이폰 연결 허용", "Allow iPhone to connect", "iPhone の接続を許可", "Permitir conexión del iPhone", "Autoriser la connexion de l'iPhone", "Permitir conexão do iPhone") }
     var phoneServerHint: String {

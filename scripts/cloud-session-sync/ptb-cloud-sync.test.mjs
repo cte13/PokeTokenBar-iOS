@@ -66,7 +66,7 @@ test('sealPayload opens with AES-256-GCM + raw inflate (the Mac wire format)', (
 });
 
 test('fixture values for the Swift test', () => {
-  // If this fails, update CloudSessionSyncTests.swift with the printed values.
+  // If this fails, update PokeTokenBarShared/Tests/PokeTokenBarSharedTests/CloudSessionCryptoTests.swift with the printed values.
   const box = sealPayload(FIXTURE_SECRET, { v: 1, rel: 'proj/s.jsonl', chunk: 2, jsonl: '{"a":1}\n' }, FIXTURE_NONCE);
   const expected = {
     channel: channelFor(FIXTURE_SECRET),

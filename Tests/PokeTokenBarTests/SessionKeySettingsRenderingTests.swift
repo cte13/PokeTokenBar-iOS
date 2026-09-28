@@ -38,13 +38,13 @@ final class SessionKeySettingsRenderingTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
             host.view.layoutSubtreeIfNeeded()
             let views = descendants(of: host.view)
-            if let secure = views.compactMap({ $0 as? NSSecureTextField }).first {
+            if let secure = sessionKeyField(in: views) {
                 let rect = secure.convert(secure.bounds, to: host.view)
                 if host.view.bounds.contains(rect) { break }
             }
         }
         let views = descendants(of: host.view)
-        let secure = try XCTUnwrap(views.compactMap { $0 as? NSSecureTextField }.first)
+        let secure = try XCTUnwrap(sessionKeyField(in: views))
         let rect = secure.convert(secure.bounds, to: host.view)
         XCTAssertTrue(host.view.bounds.contains(rect), "session key entry must be visible after scrolling")
         // Hosted CI renders the layout but does not grant this XCTest window an editor.
@@ -59,6 +59,15 @@ final class SessionKeySettingsRenderingTests: XCTestCase {
         XCTAssertTrue(navigation.showSettings)
         navigation.reset()
         XCTAssertFalse(navigation.expandAdvancedOnOpen)
+    }
+
+    /// Found by placeholder, not position: Settings has more than one secure field (the cloud-session
+    /// secret sits above this one), and "the first" silently became the wrong field once it did.
+    private func sessionKeyField(in views: [NSView]) -> NSSecureTextField? {
+        views.compactMap { $0 as? NSSecureTextField }.first {
+            let placeholder = $0.placeholderString ?? ""
+            return placeholder.hasPrefix("sk-ant") || placeholder.hasPrefix("••")
+        }
     }
 
     private func descendants(of view: NSView) -> [NSView] {

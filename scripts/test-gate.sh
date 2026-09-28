@@ -38,6 +38,10 @@ LOGIC_CORE=(
   "Sources/PokeTokenBar/Core/CustomScanRoots.swift"
   "Sources/PokeTokenBar/Core/LimitHistoryStore.swift"
   "Sources/PokeTokenBar/Core/UsageRecap.swift"
+  "Sources/PokeTokenBar/Core/CloudSessionSync.swift"
+  # The counting engine moved to the shared package (the iPhone counts too). The Mac test binary
+  # compiles it and exercises it through LocalUsageReader, so it stays under this gate.
+  "PokeTokenBarShared/Sources/PokeTokenBarShared/UsageEngine.swift"
 )
 
 echo "▶ swift test (--enable-code-coverage)"

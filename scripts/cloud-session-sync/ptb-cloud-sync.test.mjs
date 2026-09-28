@@ -11,7 +11,7 @@ import {
   parseSecret, signRequest, modifyBody, sessionFiles, pendingRecords,
 } from './ptb-cloud-sync.mjs';
 
-// Shared with Tests/PokeTokenBarTests/CloudSessionSyncTests.swift — change both together.
+// Shared with PokeTokenBarShared/Tests/PokeTokenBarSharedTests/CloudSessionCryptoTests.swift — change both together.
 export const FIXTURE_SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
 const FIXTURE_NONCE = Buffer.from(Array.from({ length: 12 }, (_, i) => 0xa0 + i));
 

@@ -166,6 +166,41 @@ final class CloudSessionSecretStoreTests: XCTestCase {
     }
 }
 
+/// These reach the CloudKit calls through `CloudSyncGate`. The test runner has no iCloud
+/// entitlement, so a helper that bypassed the gate would kill the suite with SIGTRAP instead of
+/// logging `Disabled` — running them here is the regression guard (defect log, CloudKit section).
+@MainActor
+final class CloudSessionSettingsTests: XCTestCase {
+    func testSaveValidatesStoresAndSyncsThroughTheGateAndClearRemoves() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-settings-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CloudSessionSecretStore(fileURL: dir.appendingPathComponent("s.txt"))
+
+        XCTAssertThrowsError(try CloudSessionSettings.save("nope", store: store))
+        CloudSessionSettings.publish(store: store)   // nothing saved: no sync attempt
+        XCTAssertNil(store.loadRaw())
+
+        let secret = CloudSessionCrypto.generateSecret()
+        try CloudSessionSettings.save(secret, store: store)
+        XCTAssertEqual(store.loadRaw(), secret)
+        CloudSessionSettings.clear(store: store)
+        XCTAssertNil(store.load())
+        try await Task.sleep(nanoseconds: 100_000_000)   // let the gated sync tasks run
+    }
+
+    func testMirrorReportsItsLastPull() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-lastpull-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mirror = CloudSessionMirror(root: root, fetch: { _, _ in [] })
+        let lastBefore = await mirror.lastPull()
+        XCTAssertNil(lastBefore)
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = await mirror.pull(crypto: try CloudSessionCrypto(secret: secret), now: t0)
+        let lastAfter = await mirror.lastPull()
+        XCTAssertEqual(lastAfter, t0)
+    }
+}
+
 final class PhoneLedgerPublisherTests: XCTestCase {
     private var stateURL: URL!
     private let provider = PhoneUsageLedgerManifest.Provider(id: "claude_code", displayName: "Claude Code", reportsCost: true)

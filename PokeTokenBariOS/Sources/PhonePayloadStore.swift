@@ -105,6 +105,10 @@ final class PhonePayloadStore {
         reschedule()
     }
 
+    /// Mac payload (iCloud first, then the LAN server), then the usage ledger, then the count the
+    /// phone shows (`PhoneUsageSync.display`). With the Mac off, the Mac payload fetch keeps
+    /// returning its last snapshot, while the ledger and cloud-session records keep the usage
+    /// numbers current.
     func fetch() async {
         guard !isLoading else { return }
         isLoading = true
@@ -114,45 +118,40 @@ final class PhonePayloadStore {
             hasCompletedInitialFetch = true
         }
 
+        let sync = PhoneUsageSync.shared
+        var delivered: Source?
+        var fetchError: String?
+
         // iCloud primary
-        if await CloudKitSync.isAvailable() {
+        let iCloudAvailable = await CloudKitSync.isAvailable()
+        if iCloudAvailable, let macPayload = try? await CloudKitSync.fetch() {
+            await sync.update(macPayload: macPayload)
+            delivered = .iCloud
+        } else if !host.isEmpty {
+            // Local HTTP fallback
             do {
-                if let newPayload = try await CloudKitSync.fetch() {
-                    payload = newPayload
-                    source = .iCloud
-                    isConnected = true
-                    lastFetchSucceeded = true
-                    lastFetchDate = Date()
-                    saveToSharedContainer(newPayload)
-                    return
-                }
-            } catch { /* fall through to HTTP */ }
+                await sync.update(macPayload: try await client.fetch(host: host, pairingCode: pairingCode))
+                delivered = .localNetwork
+            } catch {
+                fetchError = error.localizedDescription
+            }
         }
 
-        // Local HTTP fallback
-        guard !host.isEmpty else {
+        let ledgerSynced = iCloudAvailable ? await sync.syncLedger() : false
+        guard delivered != nil || ledgerSynced, let shown = await sync.display() else {
             if payload == nil {
-                lastError = String(localized: "No data source available")
+                lastError = fetchError ?? String(localized: "No data source available")
             }
             lastFetchSucceeded = false
             isConnected = false
             return
         }
-        do {
-            let newPayload = try await client.fetch(host: host, pairingCode: pairingCode)
-            payload = newPayload
-            source = .localNetwork
-            isConnected = true
-            lastFetchSucceeded = true
-            lastFetchDate = Date()
-            saveToSharedContainer(newPayload)
-        } catch {
-            if payload == nil {
-                lastError = error.localizedDescription
-            }
-            lastFetchSucceeded = false
-            isConnected = false
-        }
+        payload = shown
+        source = delivered ?? .iCloud
+        isConnected = true
+        lastFetchSucceeded = true
+        lastFetchDate = Date()
+        saveToSharedContainer(shown)
     }
 
     func checkConnection() async {

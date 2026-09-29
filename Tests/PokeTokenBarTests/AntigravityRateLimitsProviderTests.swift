@@ -204,10 +204,13 @@ final class AntigravityRateLimitsProviderTests: XCTestCase {
             ))
         }
 
+        // The client secret is injected: the default source reads it out of an installed Antigravity
+        // app, so without this the test passed only on Macs that have Antigravity (it failed on CI).
         let cache = AntigravityTokenCache(
             tokenFileURLs: [],
             persistentStoreURL: storeURL,
-            tokenRefresher: mockRefresher
+            tokenRefresher: mockRefresher,
+            clientSecretSource: { ["test-client-secret"] }
         )
 
         // Auto-poll path: allowKeychainPrompt is FALSE

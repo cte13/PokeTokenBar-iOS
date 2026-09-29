@@ -96,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // 크래시·OOM·강제종료·런치실패를 로그에 남기는 전역 처리. 가능한 이르게(초기 크래시도 잡히게).
         CrashReporter.install(
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
+        // The shared price table has no log of its own; unpriced models must still show up in ours.
+        ModelPricing.unpricedLogger = { AppLog.write($0) }
+        Task { await CloudSessionSettings.syncAtLaunch() }
         NSApp.setActivationPolicy(.accessory)
         Self.migrateLegacyStorageIfNeeded()   // TokenMac → PokeTokenBar 리네임: 기존 companion/캐시 보존
         LoginItem.migrateFromLegacyLoginItemIfNeeded()   // 로그인아이템 → KeepAlive 에이전트(크래시 자동 재실행)
@@ -342,16 +345,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusText: companion.statusText,
             natureText: companion.currentNature?.name(companion.language),
             lineNodes: companion.phoneLineNodes)
-        let providers = store.snapshots.map { snapshot -> PhoneProviderSnapshot in
-            PhoneProviderSnapshot(id: snapshot.providerID, displayName: snapshot.displayName,
-                                   todayTokens: snapshot.todayTotalTokens,
-                                   todayCost: snapshot.today?.totalCost ?? 0,
-                                   inputTokens: snapshot.today?.inputTokens ?? 0,
-                                   outputTokens: snapshot.today?.outputTokens ?? 0,
-                                   cacheWriteTokens: snapshot.today?.cacheCreationTokens ?? 0,
-                                   cacheReadTokens: snapshot.today?.cacheReadTokens ?? 0,
-                                   reportsCost: snapshot.reportsCost)
-        }
+        let todayKey = Self.todayDateKey()
+        let providers = Self.phoneProviderSnapshots(store.snapshots, todayKey: todayKey)
         // 가방·도감(폰 읽기 전용) — 표시 문자열은 폰에 현지화 인프라가 없어 여기서 미리 만든다
         // (companion.stageText 를 폰에 그대로 보내는 것과 같은 규약).
         let l = companion.l
@@ -383,7 +378,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let catchLog = companion.dexEntriesSorted.map { entry in
             Self.phoneDexEntry(entry, companion: companion)
         }
-        let todayKey = Self.todayDateKey()
         let dailyTrend: [PhoneDailyTrend] = store.monthDailyTotals.map { day in
             PhoneDailyTrend(date: day.date, totalTokens: day.totalTokens,
                             totalCost: day.totalCost, isToday: day.date == todayKey)
@@ -515,6 +509,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             warnThreshold: warnThreshold,
             critThreshold: critThreshold,
             history: (history?.isEmpty ?? true) ? nil : history)
+    }
+
+    /// Per-provider rows, including each provider's own week/month/burn/daily series — the phone
+    /// needs that split to recount ledger providers itself and keep these numbers for the rest
+    /// (`PhoneLedgerOverlay`). The top-level sums stay as they were for older phones.
+    nonisolated static func phoneProviderSnapshots(_ snapshots: [ProviderSnapshot], todayKey: String) -> [PhoneProviderSnapshot] {
+        snapshots.map { snapshot in
+            PhoneProviderSnapshot(id: snapshot.providerID, displayName: snapshot.displayName,
+                                  todayTokens: snapshot.todayTotalTokens,
+                                  todayCost: snapshot.today?.totalCost ?? 0,
+                                  inputTokens: snapshot.today?.inputTokens ?? 0,
+                                  outputTokens: snapshot.today?.outputTokens ?? 0,
+                                  cacheWriteTokens: snapshot.today?.cacheCreationTokens ?? 0,
+                                  cacheReadTokens: snapshot.today?.cacheReadTokens ?? 0,
+                                  reportsCost: snapshot.reportsCost,
+                                  weekTokens: snapshot.weekTotal?.totalTokens,
+                                  weekCost: snapshot.weekTotal?.totalCost,
+                                  monthTokens: snapshot.monthTotal?.totalTokens,
+                                  monthCost: snapshot.monthTotal?.totalCost,
+                                  tokensPerMinute: snapshot.activeBlock?.tokensPerMinute,
+                                  monthDaily: snapshot.monthDaily?.map {
+                                      PhoneDailyTrend(date: $0.date, totalTokens: $0.totalTokens,
+                                                      totalCost: $0.totalCost, isToday: $0.date == todayKey)
+                                  })
+        }
     }
 
     private static func todayDateKey() -> String {

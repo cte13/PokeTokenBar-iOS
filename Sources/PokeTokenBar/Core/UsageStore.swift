@@ -280,6 +280,11 @@ final class UsageStore {
     private let readDefaultIdentity: @Sendable () -> AccountIdentity?
     private let readLastPrompt: @Sendable (URL) -> Date?
     private let claudeUsageEntries: @Sendable (Date) async -> [LocalUsageReader.Entry]
+    /// Pulls cloud-session records into the mirror folder; true when a transcript file changed.
+    private let pullCloudSessions: @Sendable () async -> Bool
+    /// Uploads opted-in providers' entries for the iPhone's own count.
+    private let publishPhoneLedger: @Sendable ([PhoneLedgerPublisher.Source]) async -> Void
+    private var cloudSessionPullInFlight = false
     private let readPromptHistory: @Sendable (URL) -> ClaudeAccountUsageAttribution.Prompts
     /// Rate limits apply per account: one folder's 429 pauses that folder only, never the default
     /// account (which keeps its own backoff) nor the other folders.
@@ -832,6 +837,10 @@ final class UsageStore {
          readPromptHistory: @escaping @Sendable (URL) -> ClaudeAccountUsageAttribution.Prompts = {
             ClaudePromptHistory.installedPrompts(configDir: $0)
          },
+         pullCloudSessions: @escaping @Sendable () async -> Bool = { await UsageStore.installedCloudSessionPull() },
+         publishPhoneLedger: @escaping @Sendable ([PhoneLedgerPublisher.Source]) async -> Void = {
+            await UsageStore.installedPhoneLedgerPublish($0)
+         },
          codexLimitsProvider: any CodexLimitsProviding = CodexRateLimitsProvider(),
          opencodeGoLimitsProvider: any OpenCodeGoLimitsProviding = OpenCodeGoLimitsProvider(),
          antigravityLimitsProvider: any AntigravityLimitsProviding = AntigravityRateLimitsProvider(),
@@ -854,6 +863,8 @@ final class UsageStore {
         self.readLastPrompt = readLastPrompt
         self.claudeUsageEntries = claudeUsageEntries
         self.readPromptHistory = readPromptHistory
+        self.pullCloudSessions = pullCloudSessions
+        self.publishPhoneLedger = publishPhoneLedger
         self.sessionKeys = sessionKeys
         self.accountSessionKeys = accountSessionKeys
         self.codexLimitsProvider = codexLimitsProvider
@@ -1019,6 +1030,7 @@ final class UsageStore {
 
         let todayKey = LocalUsageReader.todayKey()
         let activeProviders = providers.filter { isProviderVisible($0.id) }
+        startCloudSessionPull()
 
         // ── Phase 1: daily (critical) — 메뉴바 숫자와 stale 판정은 여기서 확정.
         // 블록/주월 상세가 느리거나 멈춰도 메뉴바 숫자는 영향받지 않는다.
@@ -1147,6 +1159,7 @@ final class UsageStore {
         // 일별 원장은 여기서 갱신한다 — monthDaily 는 phase 2 에서만 채워지므로, phase 1 직후에
         // 기록하면 설치 후 첫 갱신에서 사용량 요약이 통째로 빈다.
         recordDailyLedger()
+        await publishPhoneLedger(for: activeProviders)
 
         // ── 한도 조회 (Keychain 프롬프트로 블로킹될 수 있어 마지막)
         // 세션 키 경로는 Keychain 을 안 읽으므로 이 토글과 무관하게 조회한다 — 토글을 켠 이유(팝업)가
@@ -1596,6 +1609,48 @@ final class UsageStore {
     }
 
     /// Local usage for the running app only, like `ClaudeAccountRoots.installedDiscovery`.
+    // MARK: Cloud sessions · phone ledger
+
+    /// Never awaited by the refresh: the pull is a network round trip and Phase 1 must not wait on
+    /// it. Mirrored files show up in the refresh it triggers when something changed.
+    private func startCloudSessionPull() {
+        guard !cloudSessionPullInFlight else { return }
+        cloudSessionPullInFlight = true
+        Task {
+            let changed = await pullCloudSessions()
+            cloudSessionPullInFlight = false
+            if changed { await refresh() }
+        }
+    }
+
+    /// Entries are collected here (cheap — the scan cache is warm after Phase 2) and uploaded in
+    /// the background. A hidden provider publishes nothing, so the phone stops recounting it.
+    private func publishPhoneLedger(for activeProviders: [any UsageProvider]) async {
+        let now = Date()
+        var sources: [PhoneLedgerPublisher.Source] = []
+        for provider in activeProviders {
+            guard let entries = await provider.phoneLedgerEntries(now: now) else { continue }
+            sources.append(PhoneLedgerPublisher.Source(
+                provider: PhoneUsageLedgerManifest.Provider(
+                    id: provider.id, displayName: provider.displayName, reportsCost: provider.reportsCost),
+                entries: entries))
+        }
+        let publish = publishPhoneLedger
+        Task.detached(priority: .utility) { await publish(sources) }
+    }
+
+    nonisolated static func installedCloudSessionPull(isBundledApp: Bool = AppEnv.isBundledApp) async -> Bool {
+        guard isBundledApp, let crypto = CloudSessionKeyStore().load() else { return false }
+        return (await CloudSessionMirror.shared.pull(crypto: crypto))?.written ?? 0 > 0
+    }
+
+    nonisolated static func installedPhoneLedgerPublish(
+        _ sources: [PhoneLedgerPublisher.Source], isBundledApp: Bool = AppEnv.isBundledApp) async
+    {
+        guard isBundledApp else { return }
+        await PhoneLedgerPublisher.shared.publish(sources)
+    }
+
     nonisolated static func installedClaudeUsageEntries(
         modifiedSince since: Date, isBundledApp: Bool = AppEnv.isBundledApp) async -> [LocalUsageReader.Entry]
     {

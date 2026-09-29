@@ -34,20 +34,44 @@ struct WidgetTimelineProvider: TimelineProvider {
         completion(WidgetEntry(date: Date(), payload: loadPayload()))
     }
 
+    /// Refreshes first (Mac payload + usage ledger), then hands WidgetKit the timeline — with the
+    /// Mac off, the ledger is the only way the widget's numbers move, and completing before the
+    /// refresh would show them one timeline late. A slow network falls back to the cached count
+    /// after `refreshBudget`.
     func getTimeline(in context: Context, completion: @escaping (Timeline<WidgetEntry>) -> Void) {
-        let entry = WidgetEntry(date: Date(), payload: loadPayload())
-        let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: Date())!
-        let timeline = Timeline(entries: [entry], policy: .after(nextUpdate))
-        completion(timeline)
-
+        let once = CompletionOnce(completion)
         Task.detached(priority: .utility) {
-            guard let ck = try? await CloudKitSync.fetch() else { return }
-            WidgetTimelineProvider.persistPayload(ck)
+            try? await Task.sleep(nanoseconds: UInt64(Self.refreshBudget * 1_000_000_000))
+            let cached = await PhoneUsageSync.shared.display() ?? PayloadCache.loadPayload()
+            once.complete(with: Self.timeline(payload: cached))
+        }
+        Task.detached(priority: .utility) {
+            let payload = await Self.refresh()
+            once.complete(with: Self.timeline(payload: payload ?? PayloadCache.loadPayload()))
             // Don't call reloadAllTimelines() here — it re-enters getTimeline()
-            // and creates an infinite loop. The .after(nextUpdate) policy above
+            // and creates an infinite loop. The .after(nextUpdate) policy
             // already schedules the next refresh, and the main app triggers
             // reloads when it saves fresh data via PhonePayloadStore.
         }
+    }
+
+    static let refreshBudget: TimeInterval = 8
+
+    static func timeline(payload: PhonePayload?) -> Timeline<WidgetEntry> {
+        let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: Date())!
+        return Timeline(entries: [WidgetEntry(date: Date(), payload: payload)], policy: .after(nextUpdate))
+    }
+
+    /// Same sequence as the app's `PhonePayloadStore.fetch`, iCloud only.
+    static func refresh() async -> PhonePayload? {
+        let sync = PhoneUsageSync.shared
+        if let macPayload = try? await CloudKitSync.fetch() {
+            await sync.update(macPayload: macPayload)
+        }
+        await sync.syncLedger()
+        guard let shown = await sync.display() else { return nil }
+        persistPayload(shown)
+        return shown
     }
 
     private func loadPayload() -> PhonePayload? {
@@ -56,6 +80,22 @@ struct WidgetTimelineProvider: TimelineProvider {
 
     static func persistPayload(_ payload: PhonePayload) {
         PayloadCache.save(payload: payload, source: "iCloud")
+    }
+}
+
+/// WidgetKit's completion must be called exactly once; the refresh and the time budget race for it.
+final class CompletionOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: ((Timeline<WidgetEntry>) -> Void)?
+
+    init(_ completion: @escaping (Timeline<WidgetEntry>) -> Void) { self.completion = completion }
+
+    func complete(with timeline: Timeline<WidgetEntry>) {
+        lock.lock()
+        let pending = completion
+        completion = nil
+        lock.unlock()
+        pending?(timeline)
     }
 }
 

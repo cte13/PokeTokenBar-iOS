@@ -1,4 +1,5 @@
 import SwiftUI
+import PokeTokenBarShared
 import UniformTypeIdentifiers
 
 @MainActor
@@ -39,6 +40,10 @@ struct SettingsView: View {
     @State private var additionalAccountsDraft = ""
     @FocusState private var additionalAccountsFocused: Bool
     @FocusState private var sessionKeyFocused: Bool
+    /// The device public key for cloud sessions, nil until a key pair exists.
+    @State private var cloudPublicKey = CloudSessionKeyStore().load()?.publicKeyBase64
+    @State private var cloudKeyError = false
+    @State private var cloudSessionsLastPull: Date?
     private var l: L { companion.l }
 
     private var isBundledApp: Bool { AppEnv.isBundledApp }
@@ -76,6 +81,7 @@ struct SettingsView: View {
                         menuBarGroup(store)
                         floatingPetGroup(store)
                         phoneServerGroup(store)
+                        cloudSessionsGroup(store)
                         notificationsGroup(store)
                         updateGroup(store)
                         transferGroup(store)
@@ -341,6 +347,64 @@ struct SettingsView: View {
         }
     }
 
+    /// Claude Code on the web. The cloud environment gets only the *public* key (safe to show);
+    /// the private key never leaves this Mac and the user's private iCloud database.
+    @ViewBuilder
+    private func cloudSessionsGroup(_ store: UsageStore) -> some View {
+        settingsSection(l.cloudSessionsSectionTitle) {
+            groupRow {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(l.cloudSessionsKeyLabel)
+                    Text(l.cloudSessionsHint).font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if cloudPublicKey == nil {
+                    Button(l.cloudSessionsGenerate) {
+                        do {
+                            cloudPublicKey = try CloudSessionSettings.generate()
+                            cloudKeyError = false
+                            Task { await store.refresh() }
+                        } catch {
+                            cloudKeyError = true
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            if let publicKey = cloudPublicKey {
+                Divider()
+                groupRow {
+                    Text(publicKey)
+                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button(l.cloudSessionsCopy) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(publicKey, forType: .string)
+                    }
+                    .controlSize(.small)
+                    Button(l.cloudSessionsRemove) {
+                        CloudSessionSettings.clear()
+                        cloudPublicKey = nil
+                    }
+                    .controlSize(.small)
+                }
+                if let last = cloudSessionsLastPull {
+                    Text(l.cloudSessionsLastPull(last.formatted(.relative(presentation: .named))))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .padding(.horizontal, 12).padding(.bottom, 8)
+                }
+            }
+            if cloudKeyError {
+                Text(l.cloudSessionsKeyError).font(.caption2).foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.bottom, 8)
+            }
+        }
+        .task(id: cloudPublicKey) {
+            cloudSessionsLastPull = await CloudSessionMirror.shared.lastPull()
+        }
+    }
 
     @ViewBuilder
     private func floatingPetGroup(_ store: UsageStore) -> some View {

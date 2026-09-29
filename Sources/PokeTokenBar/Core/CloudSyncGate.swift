@@ -39,6 +39,36 @@ enum CloudSyncGate {
         try await CloudKitSync.delete()
     }
 
+    /// The ledger and cloud-session calls throw instead of returning quietly: their callers record
+    /// success (a saved manifest, an advanced watermark), which must not happen for a skipped call.
+    struct Disabled: Error {}
+
+    static func publishLedger(chunks: [PhoneUsageLedger.Chunk], deleting: [String],
+                              manifest: PhoneUsageLedgerManifest) async throws {
+        guard allowed() else { throw Disabled() }
+        try await UsageCloudKit.publishLedger(chunks: chunks, deleting: deleting, manifest: manifest)
+    }
+
+    static func fetchCloudSessionRecords(channel: String, since: Date) async throws -> [UsageCloudKit.CloudSessionRecord] {
+        guard allowed() else { throw Disabled() }
+        return try await UsageCloudKit.fetchCloudSessionRecords(channel: channel, since: since)
+    }
+
+    static func saveCloudSessionKey(_ base64PrivateKey: String) async throws {
+        guard allowed() else { throw Disabled() }
+        try await UsageCloudKit.saveCloudSessionKey(base64PrivateKey)
+    }
+
+    static func fetchCloudSessionKey() async throws -> String? {
+        guard allowed() else { throw Disabled() }
+        return try await UsageCloudKit.fetchCloudSessionKey()
+    }
+
+    static func deleteCloudSessionKey() async throws {
+        guard allowed() else { throw Disabled() }
+        try await UsageCloudKit.deleteCloudSessionKey()
+    }
+
     /// 비허용이면 한 번만 로그를 남긴다 — save 는 매 refresh 마다 불리므로 반복 기록하지 않는다.
     private static func allowed() -> Bool {
         if hasICloudEntitlement { return true }

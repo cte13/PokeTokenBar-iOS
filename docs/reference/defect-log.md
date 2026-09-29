@@ -424,6 +424,11 @@ read_when:
   직접 부르면 개발자의 `.zshrc` 가 실행되고, 그 기기에 `CLAUDE_CONFIG_DIR` 이 export 돼 있으면 결과가 달라진다.
   주입 시임(`computeClaudeProjectRoots(configDirValue:home:)`)으로 판정하고, 실환경 확인은 일회성 프로브로
   분리한다.
+  **개발 기기에 설치된 앱도 같은 부류다.** `testAntigravityAutoPollRenewsExpiredTokenUsingRefreshTokenWithoutKeychain`
+  은 `clientSecretSource` 를 주입하지 않아 기본값(설치된 Antigravity 앱에서 client secret 추출)을 탔다 —
+  Antigravity 가 깔린 Mac 에서만 통과하고, 포크 CI 가 처음 돈 날(2026-09-28, PR #75) CI 러너에서 실패했다.
+  테스트가 못 거른 이유: 작성·실행한 모든 기기에 앱이 있었다. `AntigravityTokenCache` 를 refresher 와 함께 만드는
+  테스트는 `clientSecretSource` 도 주입한다(부류 스윕: 이 한 곳뿐). 주입 `{ [] }` 로 CI 오류 재현 확인.
 - **경로 dedup 은 심볼릭 링크를 풀고 대소문자를 무시해야 한다.** `standardizedFileURL` 은 `..`·`.` 만 정리하고
   링크는 그대로 둔다. `~/.config/claude` → `~/.claude` 링크 같은 구성에서 같은 트리를 두 번 열거·파싱하게 된다
   (합계는 전역 dedup 이 지키지만 스캔 비용과 캐시 blob 은 두 배). `resolvingSymlinksInPath()` 로 풀고

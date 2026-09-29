@@ -1,0 +1,4 @@
+# False positive: gitleaks' generic-api-key rule matched the Swift declaration of the X25519
+# key-agreement property in CloudSessionCrypto (a type name, not a key value). The property was
+# renamed afterwards; this pins only that one historical commit/line.
+1f4cae25516aafc7b38c618b9c04d6e3050ff9f1:PokeTokenBarShared/Sources/PokeTokenBarShared/CloudSessionCrypto.swift:generic-api-key:29

@@ -26,7 +26,7 @@ public struct CloudSessionCrypto: Sendable {
         case badKey, badBox, badPayload, unsafePath
     }
 
-    private let privateKey: Curve25519.KeyAgreement.PrivateKey
+    private let agreement: Curve25519.KeyAgreement.PrivateKey
     /// Raw 32-byte X25519 public key — what the cloud environment's `PTB_SYNC_PUBLIC_KEY` holds.
     public let publicKey: Data
 
@@ -35,7 +35,7 @@ public struct CloudSessionCrypto: Sendable {
               let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: privateKey) else {
             throw Failure.badKey
         }
-        self.privateKey = key
+        self.agreement = key
         self.publicKey = key.publicKey.rawRepresentation
     }
 
@@ -101,7 +101,7 @@ public struct CloudSessionCrypto: Sendable {
     }
 
     private func symmetricKey(ephemeralPublic: Data) throws -> SymmetricKey {
-        let shared = try privateKey.sharedSecretFromKeyAgreement(
+        let shared = try agreement.sharedSecretFromKeyAgreement(
             with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephemeralPublic))
         return shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: ephemeralPublic + publicKey,
                                               sharedInfo: Self.sealInfo, outputByteCount: 32)

@@ -6,7 +6,10 @@ import XCTest
 /// load-bearing part: get it wrong and the history is silently made of fake windows.
 @MainActor
 final class LimitHistoryTests: XCTestCase {
-    private var tempDir: URL!
+    /// nonisolated(unsafe): on Swift 6.1 (CI's Xcode 16) the synchronous setUp/tearDown overrides
+    /// are nonisolated, so touching a main-actor property there does not compile — the same fix as
+    /// `UsageStoreTests.testDefaults`. XCTest runs one test instance serially, so this is safe.
+    nonisolated(unsafe) private var tempDir: URL!
 
     override func setUpWithError() throws {
         tempDir = FileManager.default.temporaryDirectory

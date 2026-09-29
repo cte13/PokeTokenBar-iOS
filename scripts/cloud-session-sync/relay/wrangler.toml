@@ -1,0 +1,10 @@
+# Deploy: cd scripts/cloud-session-sync/relay && npx wrangler deploy
+# Secrets: RELAY_TOKEN, CLOUDKIT_KEY_ID, CLOUDKIT_PRIVATE_KEY — see worker.mjs.
+name = "ptb-cloud-relay"
+main = "worker.mjs"
+compatibility_date = "2026-09-01"
+
+[vars]
+CLOUDKIT_CONTAINER = "iCloud.io.github.chattymin.poketokenbar"
+# Must match the environment the Mac/iPhone builds use: xcodebuild development signing → development.
+CLOUDKIT_ENV = "development"

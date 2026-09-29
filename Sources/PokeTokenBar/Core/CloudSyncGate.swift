@@ -54,14 +54,19 @@ enum CloudSyncGate {
         return try await UsageCloudKit.fetchCloudSessionRecords(channel: channel, since: since)
     }
 
-    static func saveCloudSessionSecret(_ secret: String) async throws {
+    static func saveCloudSessionKey(_ base64PrivateKey: String) async throws {
         guard allowed() else { throw Disabled() }
-        try await UsageCloudKit.saveCloudSessionSecret(secret)
+        try await UsageCloudKit.saveCloudSessionKey(base64PrivateKey)
     }
 
-    static func deleteCloudSessionSecret() async throws {
+    static func fetchCloudSessionKey() async throws -> String? {
         guard allowed() else { throw Disabled() }
-        try await UsageCloudKit.deleteCloudSessionSecret()
+        return try await UsageCloudKit.fetchCloudSessionKey()
+    }
+
+    static func deleteCloudSessionKey() async throws {
+        guard allowed() else { throw Disabled() }
+        try await UsageCloudKit.deleteCloudSessionKey()
     }
 
     /// 비허용이면 한 번만 로그를 남긴다 — save 는 매 refresh 마다 불리므로 반복 기록하지 않는다.

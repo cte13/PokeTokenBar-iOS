@@ -1640,7 +1640,7 @@ final class UsageStore {
     }
 
     nonisolated static func installedCloudSessionPull(isBundledApp: Bool = AppEnv.isBundledApp) async -> Bool {
-        guard isBundledApp, let crypto = CloudSessionSecretStore().load() else { return false }
+        guard isBundledApp, let crypto = CloudSessionKeyStore().load() else { return false }
         return (await CloudSessionMirror.shared.pull(crypto: crypto))?.written ?? 0 > 0
     }
 

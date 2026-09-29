@@ -14,23 +14,23 @@ public actor PhoneUsageSync {
     public static let shared = PhoneUsageSync()
 
     public struct Remote: Sendable {
-        public var fetchSecret: @Sendable () async throws -> String?
+        public var fetchPrivateKey: @Sendable () async throws -> String?
         public var fetchManifest: @Sendable () async throws -> PhoneUsageLedgerManifest?
         public var fetchChunks: @Sendable ([String]) async throws -> [String: Data]
         public var fetchCloudRecords: @Sendable (_ channel: String, _ since: Date) async throws -> [UsageCloudKit.CloudSessionRecord]
 
-        public init(fetchSecret: @escaping @Sendable () async throws -> String?,
+        public init(fetchPrivateKey: @escaping @Sendable () async throws -> String?,
                     fetchManifest: @escaping @Sendable () async throws -> PhoneUsageLedgerManifest?,
                     fetchChunks: @escaping @Sendable ([String]) async throws -> [String: Data],
                     fetchCloudRecords: @escaping @Sendable (String, Date) async throws -> [UsageCloudKit.CloudSessionRecord]) {
-            self.fetchSecret = fetchSecret
+            self.fetchPrivateKey = fetchPrivateKey
             self.fetchManifest = fetchManifest
             self.fetchChunks = fetchChunks
             self.fetchCloudRecords = fetchCloudRecords
         }
 
         public static let cloudKit = Remote(
-            fetchSecret: { try await UsageCloudKit.fetchCloudSessionSecret() },
+            fetchPrivateKey: { try await UsageCloudKit.fetchCloudSessionKey() },
             fetchManifest: { try await UsageCloudKit.fetchLedgerManifest() },
             fetchChunks: { try await UsageCloudKit.fetchLedgerChunks(names: $0) },
             fetchCloudRecords: { try await UsageCloudKit.fetchCloudSessionRecords(channel: $0, since: $1) })
@@ -46,7 +46,8 @@ public actor PhoneUsageSync {
         var manifest: PhoneUsageLedgerManifest?
         /// Chunk record name → digest of the payload stored on disk.
         var chunkDigests: [String: String] = [:]
-        var secret: String?
+        /// Base64 device private key for cloud-session records (from the Mac, via the private DB).
+        var privateKey: String?
         var cloudChannel: String?
         var cloudWatermark: Date?
         /// Cloud record name → its `updatedAt`, for pruning.
@@ -139,10 +140,10 @@ public actor PhoneUsageSync {
     }
 
     private func syncCloudSessions(now: Date) async {
-        if let secret = try? await remote.fetchSecret() { state.secret = secret }
-        guard let secret = state.secret, let crypto = try? CloudSessionCrypto(base64Secret: secret) else { return }
+        if let key = try? await remote.fetchPrivateKey() { state.privateKey = key }
+        guard let key = state.privateKey, let crypto = try? CloudSessionCrypto(base64PrivateKey: key) else { return }
         if state.cloudChannel != crypto.channel {
-            // New secret: its records are a different set. Drop the old ones and start over.
+            // New key: its records are a different set. Drop the old ones and start over.
             for name in state.cloudRecords.keys { try? FileManager.default.removeItem(at: cloudURL(name)) }
             state.cloudRecords = [:]
             state.cloudWatermark = nil
@@ -179,7 +180,7 @@ public actor PhoneUsageSync {
                 (try? Data(contentsOf: chunkURL(name))).flatMap { try? PhoneUsageLedger.decode(payload: $0, fmt: fmt) } ?? []
             }
         }
-        if let secret = state.secret, let crypto = try? CloudSessionCrypto(base64Secret: secret) {
+        if let key = state.privateKey, let crypto = try? CloudSessionCrypto(base64PrivateKey: key) {
             for (name, updatedAt) in state.cloudRecords {
                 entries[CloudSessionCrypto.providerID, default: []] += cachedEntries(
                     name, key: "\(updatedAt.timeIntervalSince1970)") {

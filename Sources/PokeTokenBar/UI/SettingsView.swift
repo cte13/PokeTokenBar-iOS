@@ -40,9 +40,9 @@ struct SettingsView: View {
     @State private var additionalAccountsDraft = ""
     @FocusState private var additionalAccountsFocused: Bool
     @FocusState private var sessionKeyFocused: Bool
-    @State private var cloudSecretInput = ""
-    @State private var cloudSecretConfigured = CloudSessionSecretStore().load() != nil
-    @State private var cloudSecretInvalid = false
+    /// The device public key for cloud sessions, nil until a key pair exists.
+    @State private var cloudPublicKey = CloudSessionKeyStore().load()?.publicKeyBase64
+    @State private var cloudKeyError = false
     @State private var cloudSessionsLastPull: Date?
     private var l: L { companion.l }
 
@@ -347,75 +347,62 @@ struct SettingsView: View {
         }
     }
 
-    /// Claude Code on the web: the secret shared with the cloud-environment hook. Once saved it is
-    /// never shown again (copy only), like the session key above.
+    /// Claude Code on the web. The cloud environment gets only the *public* key (safe to show);
+    /// the private key never leaves this Mac and the user's private iCloud database.
     @ViewBuilder
     private func cloudSessionsGroup(_ store: UsageStore) -> some View {
         settingsSection(l.cloudSessionsSectionTitle) {
             groupRow {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(l.cloudSessionsSecretLabel)
+                    Text(l.cloudSessionsKeyLabel)
                     Text(l.cloudSessionsHint).font(.caption2).foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                if cloudSecretConfigured {
-                    Text(l.cloudSessionsConfigured).font(.caption).foregroundStyle(.secondary)
+                if cloudPublicKey == nil {
+                    Button(l.cloudSessionsGenerate) {
+                        do {
+                            cloudPublicKey = try CloudSessionSettings.generate()
+                            cloudKeyError = false
+                            Task { await store.refresh() }
+                        } catch {
+                            cloudKeyError = true
+                        }
+                    }
+                    .controlSize(.small)
                 }
             }
-            Divider()
-            if cloudSecretConfigured {
+            if let publicKey = cloudPublicKey {
+                Divider()
                 groupRow {
-                    if let last = cloudSessionsLastPull {
-                        Text(l.cloudSessionsLastPull(last.formatted(.relative(presentation: .named))))
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
+                    Text(publicKey)
+                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Button(l.cloudSessionsCopy) {
-                        guard let raw = CloudSessionSecretStore().loadRaw() else { return }
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(raw, forType: .string)
+                        NSPasteboard.general.setString(publicKey, forType: .string)
                     }
                     .controlSize(.small)
                     Button(l.cloudSessionsRemove) {
                         CloudSessionSettings.clear()
-                        cloudSecretConfigured = false
+                        cloudPublicKey = nil
                     }
                     .controlSize(.small)
                 }
-            } else {
-                groupRow {
-                    SecureField(l.cloudSessionsSecretPlaceholder, text: $cloudSecretInput)
-                        .textFieldStyle(.roundedBorder).controlSize(.small)
-                    Button(l.cloudSessionsGenerate) {
-                        cloudSecretInput = CloudSessionCrypto.generateSecret()
-                        saveCloudSecret(store)
-                    }
-                    .controlSize(.small)
-                    Button(l.cloudSessionsSave) { saveCloudSecret(store) }
-                        .controlSize(.small)
-                        .disabled(cloudSecretInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                if cloudSecretInvalid {
-                    Text(l.cloudSessionsInvalidSecret).font(.caption2).foregroundStyle(.red)
+                if let last = cloudSessionsLastPull {
+                    Text(l.cloudSessionsLastPull(last.formatted(.relative(presentation: .named))))
+                        .font(.caption2).foregroundStyle(.tertiary)
                         .padding(.horizontal, 12).padding(.bottom, 8)
                 }
             }
+            if cloudKeyError {
+                Text(l.cloudSessionsKeyError).font(.caption2).foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.bottom, 8)
+            }
         }
-        .task(id: cloudSecretConfigured) {
+        .task(id: cloudPublicKey) {
             cloudSessionsLastPull = await CloudSessionMirror.shared.lastPull()
-        }
-    }
-
-    private func saveCloudSecret(_ store: UsageStore) {
-        do {
-            try CloudSessionSettings.save(cloudSecretInput)
-            cloudSecretInput = ""
-            cloudSecretInvalid = false
-            cloudSecretConfigured = true
-            Task { await store.refresh() }
-        } catch {
-            cloudSecretInvalid = true
         }
     }
 

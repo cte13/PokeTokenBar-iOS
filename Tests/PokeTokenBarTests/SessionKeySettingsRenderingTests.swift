@@ -61,8 +61,8 @@ final class SessionKeySettingsRenderingTests: XCTestCase {
         XCTAssertFalse(navigation.expandAdvancedOnOpen)
     }
 
-    /// Found by placeholder, not position: Settings has more than one secure field (the cloud-session
-    /// secret sits above this one), and "the first" silently became the wrong field once it did.
+    /// Found by placeholder, not position: when another secure field was added above this one,
+    /// "the first secure field" silently became the wrong field and this test failed for it.
     private func sessionKeyField(in views: [NSView]) -> NSSecureTextField? {
         views.compactMap { $0 as? NSSecureTextField }.first {
             let placeholder = $0.placeholderString ?? ""

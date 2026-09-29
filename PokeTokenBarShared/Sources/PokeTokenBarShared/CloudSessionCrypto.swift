@@ -3,77 +3,108 @@ import Foundation
 
 /// Reader side of the cloud-session wire format written by
 /// `scripts/cloud-session-sync/ptb-cloud-sync.mjs` (a Claude Code hook running inside Claude Code
-/// on the web). Every value is derived from one 32-byte shared secret with HMAC-SHA256 and a fixed
-/// label, so the hook, the Mac and the iPhone agree without exchanging anything else.
+/// on the web).
 ///
-/// Wire format: public-DB record `CloudUsage` { channel, updatedAt, payload }, where payload is an
-/// AES-256-GCM combined box `nonce(12) ‖ ciphertext ‖ tag(16)` over raw deflate (RFC 1951) of
-/// `{"v":1,"rel":"<project>/<session>.jsonl","chunk":N,"jsonl":"<trimmed transcript lines>\n"}`.
+/// The cloud container holds nothing secret: environment variables there are readable by every
+/// session. Records are sealed to this device key pair's **public** key; only the Mac and iPhone
+/// hold the private key. The channel and record names are hashes of fixed labels and the public
+/// key, so both sides derive them independently.
+///
+/// Wire format: public-DB record `CloudUsage` { channel, updatedAt, payload }, where payload is
+/// `E.pub(32) ‖ nonce(12) ‖ AES-256-GCM ciphertext ‖ tag(16)`, the key being
+/// HKDF-SHA256(X25519(E, P), salt: E.pub ‖ P, info: "ptb-cloud-usage/seal/v2") for a fresh
+/// ephemeral key E per record, over raw deflate (RFC 1951) of
+/// `{"v":2,"rel":"<project>/<session>.jsonl","chunk":N,"jsonl":"<trimmed transcript lines>\n"}`.
 /// The Node test prints the cross-language fixture that `CloudSessionCryptoTests` pins.
 public struct CloudSessionCrypto: Sendable {
     /// The hook uploads Claude Code transcripts, so its entries count as this provider.
     public static let providerID = "claude_code"
     public static let recordType = "CloudUsage"
+    static let sealInfo = Data("ptb-cloud-usage/seal/v2".utf8)
 
     public enum Failure: Error, Equatable {
-        case badSecret, badBox, badPayload, unsafePath
+        case badKey, badBox, badPayload, unsafePath
     }
 
-    private let secret: SymmetricKey
-    private let encryptionKey: SymmetricKey
+    private let privateKey: Curve25519.KeyAgreement.PrivateKey
+    /// Raw 32-byte X25519 public key — what the cloud environment's `PTB_SYNC_PUBLIC_KEY` holds.
+    public let publicKey: Data
 
-    public init(secret: Data) throws {
-        guard secret.count == 32 else { throw Failure.badSecret }
-        self.secret = SymmetricKey(data: secret)
-        self.encryptionKey = SymmetricKey(data: Self.hmac(self.secret, "ptb-cloud-usage/enc/v1"))
-    }
-
-    /// `PTB_SYNC_SECRET` form: base64 of exactly 32 bytes (surrounding whitespace ignored).
-    public init(base64Secret: String) throws {
-        guard let data = Data(base64Encoded: base64Secret.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw Failure.badSecret
+    public init(privateKey: Data) throws {
+        guard privateKey.count == 32,
+              let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: privateKey) else {
+            throw Failure.badKey
         }
-        try self.init(secret: data)
+        self.privateKey = key
+        self.publicKey = key.publicKey.rawRepresentation
     }
 
-    /// A fresh secret in the `PTB_SYNC_SECRET` form.
-    public static func generateSecret() -> String {
-        SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString()
+    /// The stored form: base64 of the 32-byte private key (surrounding whitespace ignored).
+    public init(base64PrivateKey: String) throws {
+        guard let data = Data(base64Encoded: base64PrivateKey.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw Failure.badKey
+        }
+        try self.init(privateKey: data)
     }
+
+    /// A fresh private key in the stored form.
+    public static func generatePrivateKey() -> String {
+        Curve25519.KeyAgreement.PrivateKey().rawRepresentation.base64EncodedString()
+    }
+
+    public var publicKeyBase64: String { publicKey.base64EncodedString() }
 
     /// Public-database records are readable by anyone holding the container's API token, so they
     /// are found by this opaque channel, never by anything that identifies the user.
     public var channel: String {
-        String(Self.hex(Self.hmac(secret, "ptb-cloud-usage/channel/v1")).prefix(32))
+        String(Self.hex(Self.sha256(Data("ptb-cloud-usage/channel/v2".utf8) + publicKey)).prefix(32))
     }
 
     public func recordName(rel: String, chunk: Int) -> String {
-        "cu_" + Self.hex(Self.hmac(secret, "ptb-cloud-usage/record/v1|\(rel)|\(chunk)")).prefix(40)
+        "cu_" + Self.hex(Self.sha256(Data("ptb-cloud-usage/record/v2|\(rel)|\(chunk)".utf8) + publicKey)).prefix(40)
     }
 
     /// Decrypts, inflates and validates one record payload.
     public func open(_ box: Data) throws -> CloudSessionPayload {
+        let box = Data(box)   // re-base indices: a slice would make `prefix`/`dropFirst` offsets lie
+        guard box.count > 32 + 12 + 16 else { throw Failure.badBox }
+        let ephemeral = box.prefix(32)
         let plain: Data
         do {
-            plain = try AES.GCM.open(try AES.GCM.SealedBox(combined: box), using: encryptionKey)
+            let key = try symmetricKey(ephemeralPublic: ephemeral)
+            plain = try AES.GCM.open(try AES.GCM.SealedBox(combined: box.dropFirst(32)), using: key)
         } catch {
             throw Failure.badBox
         }
         guard let json = try? (plain as NSData).decompressed(using: .zlib) as Data,
               let payload = try? JSONDecoder().decode(CloudSessionPayload.self, from: json),
-              payload.v == 1, payload.chunk >= 0 else { throw Failure.badPayload }
+              payload.v == 2, payload.chunk >= 0 else { throw Failure.badPayload }
         guard Self.isSafeRelativePath(payload.rel) else { throw Failure.unsafePath }
         return payload
     }
 
     /// Writer side, for tests and fixtures — production records are sealed by the Node hook.
-    public func seal(_ payload: CloudSessionPayload, nonce: AES.GCM.Nonce = AES.GCM.Nonce()) throws -> Data {
+    public func seal(_ payload: CloudSessionPayload,
+                     ephemeral: Curve25519.KeyAgreement.PrivateKey = .init(),
+                     nonce: AES.GCM.Nonce = AES.GCM.Nonce()) throws -> Data {
         let json = try JSONEncoder().encode(payload)
         let deflated = try (json as NSData).compressed(using: .zlib) as Data
-        guard let combined = try AES.GCM.seal(deflated, using: encryptionKey, nonce: nonce).combined else {
+        let shared = try ephemeral.sharedSecretFromKeyAgreement(
+            with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKey))
+        let ephemeralPublic = ephemeral.publicKey.rawRepresentation
+        let key = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: ephemeralPublic + publicKey,
+                                                 sharedInfo: Self.sealInfo, outputByteCount: 32)
+        guard let combined = try AES.GCM.seal(deflated, using: key, nonce: nonce).combined else {
             throw Failure.badBox
         }
-        return combined
+        return ephemeralPublic + combined
+    }
+
+    private func symmetricKey(ephemeralPublic: Data) throws -> SymmetricKey {
+        let shared = try privateKey.sharedSecretFromKeyAgreement(
+            with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephemeralPublic))
+        return shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: ephemeralPublic + publicKey,
+                                              sharedInfo: Self.sealInfo, outputByteCount: 32)
     }
 
     /// `rel` becomes a file path under the Mac's mirror folder, and it arrives from a record anyone
@@ -88,9 +119,7 @@ public struct CloudSessionCrypto: Sendable {
         return parts.count >= 2 && parts.allSatisfy { !$0.isEmpty && !$0.hasPrefix(".") }
     }
 
-    private static func hmac(_ key: SymmetricKey, _ label: String) -> Data {
-        Data(HMAC<SHA256>.authenticationCode(for: Data(label.utf8), using: key))
-    }
+    private static func sha256(_ data: Data) -> Data { Data(SHA256.hash(data: data)) }
 
     private static func hex(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
@@ -105,7 +134,7 @@ public struct CloudSessionPayload: Codable, Sendable, Equatable {
     public let chunk: Int
     public let jsonl: String
 
-    public init(v: Int = 1, rel: String, chunk: Int, jsonl: String) {
+    public init(v: Int = 2, rel: String, chunk: Int, jsonl: String) {
         self.v = v
         self.rel = rel
         self.chunk = chunk

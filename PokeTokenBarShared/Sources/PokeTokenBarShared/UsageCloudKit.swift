@@ -1,15 +1,15 @@
 import CloudKit
 
-/// CloudKit I/O for counting on the iPhone: the Mac's usage ledger and the cloud-session secret
-/// (private database), plus the cloud-session records written by the Claude Code hook (public
+/// CloudKit I/O for counting on the iPhone: the Mac's usage ledger and the cloud-session private
+/// key (private database), plus the cloud-session records written by the Claude Code hook (public
 /// database). The Mac must reach these only through `CloudSyncGate` — `CKContainer` traps in a
 /// process without the iCloud entitlement.
 ///
 /// Writes follow the rule in the defect log's CloudKit section: `CKModifyRecordsOperation`
 /// with `.allKeys`, never fetch-modify-save.
 public enum UsageCloudKit {
-    static let secretRecordType = "CloudSessionSecret"
-    static let secretRecordName = "CloudSessionSecretCurrent"
+    static let keyRecordType = "CloudSessionKey"
+    static let keyRecordName = "CloudSessionKeyCurrent"
     /// CloudKit rejects a modify with more than 400 items; stay well under it.
     static let batchSize = 200
     /// Every request here is best effort beside the usage refresh; none may hold it up for long.
@@ -78,27 +78,28 @@ public enum UsageCloudKit {
         return record
     }
 
-    // MARK: - Cloud-session secret (private)
+    // MARK: - Cloud-session private key (private DB)
 
-    /// The Mac saves the secret here so the iPhone and its widget pick it up with no step on the phone.
-    public static func saveCloudSessionSecret(_ secret: String) async throws {
-        let record = CKRecord(recordType: secretRecordType, recordID: CKRecord.ID(recordName: secretRecordName))
-        record["secret"] = secret
+    /// The Mac saves the device private key here so the iPhone and its widget can open
+    /// cloud-session records with no step on the phone, and a reinstalled Mac gets it back.
+    public static func saveCloudSessionKey(_ base64PrivateKey: String) async throws {
+        let record = CKRecord(recordType: keyRecordType, recordID: CKRecord.ID(recordName: keyRecordName))
+        record["privateKey"] = base64PrivateKey
         try await modify(save: [record], delete: [], in: CloudKitSync.container.privateCloudDatabase)
     }
 
-    public static func fetchCloudSessionSecret() async throws -> String? {
+    public static func fetchCloudSessionKey() async throws -> String? {
         do {
             let record = try await CloudKitSync.container.privateCloudDatabase
-                .record(for: CKRecord.ID(recordName: secretRecordName))
-            return record["secret"] as? String
+                .record(for: CKRecord.ID(recordName: keyRecordName))
+            return record["privateKey"] as? String
         } catch let error as CKError where error.code == .unknownItem {
             return nil
         }
     }
 
-    public static func deleteCloudSessionSecret() async throws {
-        try await modify(save: [], delete: [CKRecord.ID(recordName: secretRecordName)],
+    public static func deleteCloudSessionKey() async throws {
+        try await modify(save: [], delete: [CKRecord.ID(recordName: keyRecordName)],
                          in: CloudKitSync.container.privateCloudDatabase)
     }
 

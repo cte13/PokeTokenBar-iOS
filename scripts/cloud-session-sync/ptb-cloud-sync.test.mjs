@@ -1,19 +1,37 @@
 // Run: node --test scripts/cloud-session-sync/ptb-cloud-sync.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDecipheriv, generateKeyPairSync, createHash, verify } from 'node:crypto';
+import { createDecipheriv, diffieHellman, hkdfSync, createPublicKey } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  trimLine, trimTranscript, chunkEntries, sealPayload, encryptionKey, channelFor, recordNameFor,
-  parseSecret, signRequest, modifyBody, sessionFiles, pendingRecords,
+  trimLine, trimTranscript, chunkEntries, sealPayload, channelFor, recordNameFor,
+  parsePublicKey, relayBody, sessionFiles, pendingRecords, x25519PrivateKey,
 } from './ptb-cloud-sync.mjs';
 
 // Shared with PokeTokenBarShared/Tests/PokeTokenBarSharedTests/CloudSessionCryptoTests.swift — change both together.
-export const FIXTURE_SECRET = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+const DEVICE_PRIVATE = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+const EPHEMERAL_PRIVATE = Buffer.from(Array.from({ length: 32 }, (_, i) => 0x41 + i));
 const FIXTURE_NONCE = Buffer.from(Array.from({ length: 12 }, (_, i) => 0xa0 + i));
+const devicePrivate = x25519PrivateKey(DEVICE_PRIVATE);
+export const DEVICE_PUBLIC = Buffer.from(createPublicKey(devicePrivate).export({ format: 'jwk' }).x, 'base64url');
+
+/// What CloudSessionCrypto.open does, in Node — proves the box opens with only the private key.
+function openBox(box) {
+  const ephemeralPublic = box.subarray(0, 32);
+  const shared = diffieHellman({
+    privateKey: devicePrivate,
+    publicKey: createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), ephemeralPublic]), format: 'der', type: 'spki' }),
+  });
+  const key = Buffer.from(hkdfSync('sha256', shared, Buffer.concat([ephemeralPublic, DEVICE_PUBLIC]),
+                                   Buffer.from('ptb-cloud-usage/seal/v2'), 32));
+  const decipher = createDecipheriv('aes-256-gcm', key, box.subarray(32, 44));
+  decipher.setAuthTag(box.subarray(box.length - 16));
+  const plain = Buffer.concat([decipher.update(box.subarray(44, box.length - 16)), decipher.final()]);
+  return JSON.parse(inflateRawSync(plain).toString('utf8'));
+}
 
 const assistant = (id, req, out, extra = {}) => JSON.stringify({
   parentUuid: 'p', type: 'assistant', timestamp: '2026-09-27T10:00:00.000Z', requestId: req, cwd: '/secret/path',
@@ -56,21 +74,22 @@ test('chunks are stable as the transcript grows', () => {
   assert.deepEqual(chunkEntries([...entries, 7], 3).slice(0, 2), [[0, 1, 2], [3, 4, 5]]);
 });
 
-test('sealPayload opens with AES-256-GCM + raw inflate (the Mac wire format)', () => {
-  const payload = { v: 1, rel: 'proj/s.jsonl', chunk: 0, jsonl: 'x\n' };
-  const box = sealPayload(FIXTURE_SECRET, payload, FIXTURE_NONCE);
-  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(FIXTURE_SECRET), box.subarray(0, 12));
-  decipher.setAuthTag(box.subarray(box.length - 16));
-  const plain = Buffer.concat([decipher.update(box.subarray(12, box.length - 16)), decipher.final()]);
-  assert.deepEqual(JSON.parse(inflateRawSync(plain).toString('utf8')), payload);
+test('sealPayload opens with the device private key (the Mac wire format)', () => {
+  const payload = { v: 2, rel: 'proj/s.jsonl', chunk: 0, jsonl: 'x\n' };
+  const box = sealPayload(DEVICE_PUBLIC, payload);
+  assert.deepEqual(openBox(box), payload);
+  assert.notDeepEqual(sealPayload(DEVICE_PUBLIC, payload).subarray(0, 32), box.subarray(0, 32),
+    'a fresh ephemeral key per record');
 });
 
 test('fixture values for the Swift test', () => {
   // If this fails, update PokeTokenBarShared/Tests/PokeTokenBarSharedTests/CloudSessionCryptoTests.swift with the printed values.
-  const box = sealPayload(FIXTURE_SECRET, { v: 1, rel: 'proj/s.jsonl', chunk: 2, jsonl: '{"a":1}\n' }, FIXTURE_NONCE);
+  const box = sealPayload(DEVICE_PUBLIC, { v: 2, rel: 'proj/s.jsonl', chunk: 2, jsonl: '{"a":1}\n' },
+    { ephemeral: x25519PrivateKey(EPHEMERAL_PRIVATE), nonce: FIXTURE_NONCE });
   const expected = {
-    channel: channelFor(FIXTURE_SECRET),
-    recordName: recordNameFor(FIXTURE_SECRET, 'proj/s.jsonl', 2),
+    publicKey: DEVICE_PUBLIC.toString('base64'),
+    channel: channelFor(DEVICE_PUBLIC),
+    recordName: recordNameFor(DEVICE_PUBLIC, 'proj/s.jsonl', 2),
     box: box.toString('base64'),
   };
   console.log(JSON.stringify(expected));
@@ -78,29 +97,14 @@ test('fixture values for the Swift test', () => {
   assert.match(expected.recordName, /^cu_[0-9a-f]{40}$/);
 });
 
-test('parseSecret rejects keys that are not 32 bytes', () => {
-  assert.throws(() => parseSecret(Buffer.alloc(16).toString('base64')));
-  assert.equal(parseSecret(FIXTURE_SECRET.toString('base64')).length, 32);
+test('parsePublicKey rejects keys that are not 32 bytes', () => {
+  assert.throws(() => parsePublicKey(Buffer.alloc(16).toString('base64')));
+  assert.deepEqual(parsePublicKey(` ${DEVICE_PUBLIC.toString('base64')}\n`), DEVICE_PUBLIC);
 });
 
-test('signRequest signs date:bodyhash:subpath with ECDSA P-256', () => {
-  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-  const body = '{"x":1}';
-  const subpath = '/database/1/iCloud.x/development/public/records/modify';
-  const h = signRequest({ keyID: 'kid', privateKey, subpath, body, date: '2026-09-27T10:00:00Z' });
-  assert.equal(h['X-Apple-CloudKit-Request-ISO8601Date'], '2026-09-27T10:00:00Z');
-  const message = `2026-09-27T10:00:00Z:${createHash('sha256').update(body).digest('base64')}:${subpath}`;
-  assert.ok(verify('sha256', Buffer.from(message), publicKey,
-    Buffer.from(h['X-Apple-CloudKit-Request-SignatureV1'], 'base64')));
-});
-
-test('modifyBody writes channel / updatedAt / payload with CloudKit types', () => {
-  const body = JSON.parse(modifyBody([{ recordName: 'cu_x', channel: 'c', updatedAt: 5, payload: Buffer.from('hi') }]));
-  const op = body.operations[0];
-  assert.equal(op.operationType, 'forceReplace');
-  assert.equal(op.record.recordType, 'CloudUsage');
-  assert.deepEqual(op.record.fields.payload, { value: Buffer.from('hi').toString('base64'), type: 'BYTES' });
-  assert.equal(op.record.fields.updatedAt.type, 'TIMESTAMP');
+test('relayBody sends exactly what the relay validates', () => {
+  const body = JSON.parse(relayBody([{ recordName: 'cu_x', channel: 'c', updatedAt: 5, payload: Buffer.from('hi'), digest: 'd' }]));
+  assert.deepEqual(body, { records: [{ recordName: 'cu_x', channel: 'c', updatedAt: 5, payload: Buffer.from('hi').toString('base64') }] });
 });
 
 test('sessionFiles + pendingRecords: subagents included, unchanged chunks skipped', () => {
@@ -115,12 +119,12 @@ test('sessionFiles + pendingRecords: subagents included, unchanged chunks skippe
   assert.deepEqual(files.map((f) => f.rel).sort(),
     ['-home-user-repo/sess.jsonl', '-home-user-repo/sess/subagents/agent-1.jsonl']);
 
-  const first = pendingRecords(FIXTURE_SECRET, files, {});
+  const first = pendingRecords(DEVICE_PUBLIC, files, {});
   assert.equal(first.length, 2);
   const uploaded = Object.fromEntries(first.map((r) => [r.recordName, r.digest]));
-  assert.equal(pendingRecords(FIXTURE_SECRET, files, uploaded).length, 0, 'nothing changed');
+  assert.equal(pendingRecords(DEVICE_PUBLIC, files, uploaded).length, 0, 'nothing changed');
 
   fs.appendFileSync(main, assistant('m2', 'r2', 5) + '\n');
-  const next = pendingRecords(FIXTURE_SECRET, files, uploaded);
+  const next = pendingRecords(DEVICE_PUBLIC, files, uploaded);
   assert.equal(next.length, 1, 'only the grown transcript re-uploads');
 });

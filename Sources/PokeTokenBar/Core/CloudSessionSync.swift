@@ -12,29 +12,28 @@ import PokeTokenBarShared
 //   can count on its own (`PhoneLedgerOverlay`).
 // Every CloudKit call goes through `CloudSyncGate`.
 
-/// The shared secret for cloud-session records (`PTB_SYNC_SECRET` in the cloud environment).
-/// A 0600 file beside `session-key.json`, not Keychain — `CredentialFileProtection` explains why.
-struct CloudSessionSecretStore: Sendable {
+/// The device private key for cloud-session records (X25519, base64). The cloud environment only
+/// ever holds the matching public key. A 0600 file beside `session-key.json`, not Keychain —
+/// `CredentialFileProtection` explains why.
+struct CloudSessionKeyStore: Sendable {
     let fileURL: URL
 
     init(fileURL: URL? = nil) {
-        self.fileURL = fileURL ?? AppStatePaths.directory().appendingPathComponent("cloud-session-secret.txt")
+        self.fileURL = fileURL ?? AppStatePaths.directory().appendingPathComponent("cloud-session-key.txt")
     }
 
     func load() -> CloudSessionCrypto? {
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
-        return try? CloudSessionCrypto(base64Secret: text)
+        loadRaw().flatMap { try? CloudSessionCrypto(base64PrivateKey: $0) }
     }
 
     func loadRaw() -> String? {
         (try? String(contentsOf: fileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Rejects anything that is not base64 of 32 bytes, so a paste error surfaces in Settings
-    /// instead of as silently undecryptable records.
-    func save(_ base64Secret: String) throws {
-        let trimmed = base64Secret.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try CloudSessionCrypto(base64Secret: trimmed)
+    /// Rejects anything that is not a valid 32-byte private key.
+    func save(_ base64PrivateKey: String) throws {
+        let trimmed = base64PrivateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try CloudSessionCrypto(base64PrivateKey: trimmed)
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: fileURL)
@@ -107,7 +106,7 @@ actor CloudSessionMirror {
                 if try write(try crypto.open(record.payload)) { outcome.written += 1 }
                 state.watermark = max(state.watermark ?? record.updatedAt, record.updatedAt)
             } catch {
-                // A record we cannot open is not ours (wrong secret, or someone else's channel
+                // A record we cannot open is not ours (wrong key, or someone else's channel
                 // collision) — skip it but still advance past it.
                 outcome.rejected += 1
                 state.watermark = max(state.watermark ?? record.updatedAt, record.updatedAt)
@@ -145,7 +144,7 @@ actor CloudSessionMirror {
 
     private var stateURL: URL { root.appendingPathComponent(".state.json") }
 
-    /// A different secret means a different channel: start over rather than skip its history.
+    /// A different key means a different channel: start over rather than skip its history.
     private func loadState(channel: String) -> State {
         guard let data = try? Data(contentsOf: stateURL),
               let state = try? JSONDecoder().decode(State.self, from: data),
@@ -236,30 +235,50 @@ actor PhoneLedgerPublisher {
     }
 }
 
-/// Settings actions for the cloud-session secret. Saving also writes it to the private database,
-/// which is how the iPhone and its widget get it with no step on the phone.
+/// Settings actions for the cloud-session key pair. The private key is also written to the private
+/// database — that is how the iPhone and its widget get it with no step on the phone, and how a
+/// reinstalled Mac gets it back.
 @MainActor
 enum CloudSessionSettings {
-    static func save(_ secret: String, store: CloudSessionSecretStore = CloudSessionSecretStore()) throws {
-        try store.save(secret)
+    /// Creates the key pair and returns its public key (what the cloud environment needs).
+    @discardableResult
+    static func generate(store: CloudSessionKeyStore = CloudSessionKeyStore()) throws -> String {
+        let privateKey = CloudSessionCrypto.generatePrivateKey()
+        try store.save(privateKey)
         publish(store: store)
+        return try CloudSessionCrypto(base64PrivateKey: privateKey).publicKeyBase64
     }
 
-    static func clear(store: CloudSessionSecretStore = CloudSessionSecretStore()) {
+    static func clear(store: CloudSessionKeyStore = CloudSessionKeyStore()) {
         store.clear()
         Task {
-            do { try await CloudSyncGate.deleteCloudSessionSecret() }
-            catch { AppLog.write("cloud sessions: secret delete failed: \(error)") }
+            do { try await CloudSyncGate.deleteCloudSessionKey() }
+            catch { AppLog.write("cloud sessions: key delete failed: \(error)") }
         }
     }
 
-    /// Also run at launch: a secret saved by a build without the iCloud entitlement, or while
-    /// offline, still reaches the phone once this Mac can sync.
-    static func publish(store: CloudSessionSecretStore = CloudSessionSecretStore()) {
+    static func publish(store: CloudSessionKeyStore = CloudSessionKeyStore()) {
         guard let raw = store.loadRaw(), store.load() != nil else { return }
         Task {
-            do { try await CloudSyncGate.saveCloudSessionSecret(raw) }
-            catch { AppLog.writeIfChanged("cloud-session-secret", "cloud sessions: secret sync failed: \(error)") }
+            do { try await CloudSyncGate.saveCloudSessionKey(raw) }
+            catch { AppLog.writeIfChanged("cloud-session-key", "cloud sessions: key sync failed: \(error)") }
         }
+    }
+
+    /// At launch: publish the local key (a key made by a build without the iCloud entitlement, or
+    /// offline, still reaches the phone), or — with no local key — adopt the one in iCloud, so a
+    /// reinstalled Mac keeps reading the records sealed to it. Returns true when a key was adopted.
+    @discardableResult
+    static func syncAtLaunch(store: CloudSessionKeyStore = CloudSessionKeyStore(),
+                             fetch: @escaping @Sendable () async throws -> String? = {
+                                 try await CloudSyncGate.fetchCloudSessionKey()
+                             }) async -> Bool {
+        if store.load() != nil {
+            publish(store: store)
+            return false
+        }
+        guard let remote = try? await fetch(), (try? store.save(remote)) != nil else { return false }
+        AppLog.write("cloud sessions: restored the device key from iCloud")
+        return true
     }
 }

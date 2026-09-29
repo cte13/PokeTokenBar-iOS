@@ -7,39 +7,56 @@ import Testing
 /// The fixture values are printed by the Node test "fixture values for the Swift test"; if that
 /// output ever changes, update both sides together.
 struct CloudSessionCryptoTests {
-    static let secret = Data((1...32).map(UInt8.init))
-    static let nodeBox = "oKGio6Slpqeoqaqr3+gleGVX1SySEWRalLGzyz0L/07zxidj+o6Hl/VVwIy6wrEL3exVAigHw0pe0xFfOE59T3L87MdnYl8//YZK0PqRJPUmmNydnhU="
+    static let privateKey = Data((1...32).map(UInt8.init))
+    static let ephemeral = Data((0x41...0x60).map(UInt8.init))
+    static let nonce = Data((0xA0...0xAB).map(UInt8.init))
+    static let nodeBox = "ZLEBsdC+WocEvQePmJUAH8A+jp+VIvGI3RKNmEbUhGagoaKjpKWmp6ipqqu2k9tylicn5qm2wO8bXSifGwCeJTVQ4WnBjKfDteGjiLcw6aijBZAMneudCXBK5fysBKHctJ/TteRZmTKbFIF/n5OwEQMQ"
 
-    @Test func derivesTheSameChannelAndRecordNameAsTheHook() throws {
-        let crypto = try CloudSessionCrypto(secret: Self.secret)
-        #expect(crypto.channel == "eb4bca572ba7c3fab549b8d529a9f79a")
-        #expect(crypto.recordName(rel: "proj/s.jsonl", chunk: 2) == "cu_5d5e8e9f412201ae5b00dcc97138f0aecb8317d1")
+    @Test func derivesTheSamePublicKeyChannelAndRecordNameAsTheHook() throws {
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
+        #expect(crypto.publicKeyBase64 == "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=")
+        #expect(crypto.channel == "c98193ca7ae8b64ff8c3d5a3caccccb6")
+        #expect(crypto.recordName(rel: "proj/s.jsonl", chunk: 2) == "cu_6109097f2472a133ebe2d9537cb04300f3442f96")
     }
 
     @Test func opensABoxSealedByTheHook() throws {
-        let crypto = try CloudSessionCrypto(secret: Self.secret)
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
         let payload = try crypto.open(try #require(Data(base64Encoded: Self.nodeBox)))
         #expect(payload == CloudSessionPayload(rel: "proj/s.jsonl", chunk: 2, jsonl: "{\"a\":1}\n"))
     }
 
+    /// With the fixture's ephemeral key and nonce, Swift writes the same header (ephemeral public
+    /// key, nonce) as Node. The ciphertext cannot match byte for byte — the two JSON encoders
+    /// order keys differently — so the cross-language proof is `opensABoxSealedByTheHook`.
+    @Test func swiftSealsTheSameHeaderAsTheHook() throws {
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
+        let box = try crypto.seal(CloudSessionPayload(rel: "proj/s.jsonl", chunk: 2, jsonl: "{\"a\":1}\n"),
+                                  ephemeral: try .init(rawRepresentation: Self.ephemeral),
+                                  nonce: try .init(data: Self.nonce))
+        let opened = try crypto.open(box)
+        #expect(opened.rel == "proj/s.jsonl")
+        #expect(box.prefix(44) == (try #require(Data(base64Encoded: Self.nodeBox))).prefix(44))
+    }
+
     @Test func swiftSealRoundTripsThroughOpen() throws {
-        let crypto = try CloudSessionCrypto(secret: Self.secret)
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
         let payload = CloudSessionPayload(rel: "p/s/subagents/a.jsonl", chunk: 0, jsonl: "x\n")
         #expect(try crypto.open(try crypto.seal(payload)) == payload)
     }
 
-    @Test func aDifferentSecretCannotOpenTheBox() throws {
-        let other = try CloudSessionCrypto(secret: Data(repeating: 7, count: 32))
+    @Test func aDifferentPrivateKeyCannotOpenTheBox() throws {
+        let other = try CloudSessionCrypto(privateKey: Data(repeating: 7, count: 32))
         #expect(throws: CloudSessionCrypto.Failure.badBox) {
             try other.open(try #require(Data(base64Encoded: Self.nodeBox)))
         }
+        #expect(throws: CloudSessionCrypto.Failure.badBox) { try other.open(Data(count: 40)) }
     }
 
-    @Test func rejectsSecretsThatAreNot32Bytes() {
-        #expect(throws: CloudSessionCrypto.Failure.badSecret) { try CloudSessionCrypto(secret: Data(count: 16)) }
-        #expect(throws: CloudSessionCrypto.Failure.badSecret) { try CloudSessionCrypto(base64Secret: "not base64!") }
-        #expect(throws: Never.self) { try CloudSessionCrypto(base64Secret: " \(Self.secret.base64EncodedString())\n") }
-        #expect(Data(base64Encoded: CloudSessionCrypto.generateSecret())?.count == 32)
+    @Test func rejectsKeysThatAreNot32Bytes() {
+        #expect(throws: CloudSessionCrypto.Failure.badKey) { try CloudSessionCrypto(privateKey: Data(count: 16)) }
+        #expect(throws: CloudSessionCrypto.Failure.badKey) { try CloudSessionCrypto(base64PrivateKey: "not base64!") }
+        #expect(throws: Never.self) { try CloudSessionCrypto(base64PrivateKey: " \(Self.privateKey.base64EncodedString())\n") }
+        #expect(Data(base64Encoded: CloudSessionCrypto.generatePrivateKey())?.count == 32)
     }
 
     /// `rel` becomes a path under the Mac's mirror folder and comes from a public record.
@@ -49,7 +66,7 @@ struct CloudSessionCryptoTests {
     ])
     func unsafePathsAreRejected(rel: String) throws {
         #expect(!CloudSessionCrypto.isSafeRelativePath(rel))
-        let crypto = try CloudSessionCrypto(secret: Self.secret)
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
         let box = try crypto.seal(CloudSessionPayload(rel: rel, chunk: 0, jsonl: ""))
         #expect(throws: CloudSessionCrypto.Failure.unsafePath) { try crypto.open(box) }
     }
@@ -60,7 +77,7 @@ struct CloudSessionCryptoTests {
     }
 
     @Test func negativeChunkIsRejected() throws {
-        let crypto = try CloudSessionCrypto(secret: Self.secret)
+        let crypto = try CloudSessionCrypto(privateKey: Self.privateKey)
         let box = try crypto.seal(CloudSessionPayload(rel: "p/s.jsonl", chunk: -1, jsonl: ""))
         #expect(throws: CloudSessionCrypto.Failure.badPayload) { try crypto.open(box) }
     }

@@ -367,27 +367,20 @@ struct L {
     // Claude Code on the web (cloud-session sync) — fork-only strings, German falls back to English.
     var cloudSessionsSectionTitle: String { t("웹의 Claude Code", "Claude Code on the web", "Web 版 Claude Code", "Claude Code en la web", "Claude Code sur le web", "Claude Code na web") }
     var cloudSessionsHint: String {
-        t("클라우드 세션의 사용량을 셉니다. 클라우드 환경의 PTB_SYNC_SECRET 에 같은 비밀값을 넣으세요. iPhone 은 iCloud 로 자동으로 받습니다.",
-          "Counts usage from cloud sessions. Put the same secret in the cloud environment's PTB_SYNC_SECRET. Your iPhone gets it through iCloud automatically.",
-          "クラウドセッションの使用量を数えます。クラウド環境の PTB_SYNC_SECRET に同じシークレットを設定してください。iPhone には iCloud で自動的に届きます。",
-          "Cuenta el uso de las sesiones en la nube. Pon el mismo secreto en PTB_SYNC_SECRET del entorno en la nube. Tu iPhone lo recibe por iCloud automáticamente.",
-          "Compte l'utilisation des sessions cloud. Mettez le même secret dans PTB_SYNC_SECRET de l'environnement cloud. Votre iPhone le reçoit automatiquement via iCloud.",
-          "Conta o uso das sessões na nuvem. Coloque o mesmo segredo em PTB_SYNC_SECRET do ambiente na nuvem. Seu iPhone o recebe pelo iCloud automaticamente.")
+        t("클라우드 세션의 사용량을 셉니다. 아래 공개 키를 클라우드 환경의 PTB_SYNC_PUBLIC_KEY 에 넣으세요 — 공개해도 안전합니다. 개인 키는 이 Mac 과 iCloud 에만 있고 iPhone 은 자동으로 받습니다.",
+          "Counts usage from cloud sessions. Put the public key below in the cloud environment's PTB_SYNC_PUBLIC_KEY — it is safe to share. The private key stays on this Mac and in your iCloud; your iPhone gets it automatically.",
+          "クラウドセッションの使用量を数えます。下の公開鍵をクラウド環境の PTB_SYNC_PUBLIC_KEY に設定してください。公開しても安全です。秘密鍵はこの Mac と iCloud にだけあり、iPhone には自動で届きます。",
+          "Cuenta el uso de las sesiones en la nube. Pon la clave pública de abajo en PTB_SYNC_PUBLIC_KEY del entorno en la nube; es seguro compartirla. La clave privada queda en este Mac y en tu iCloud; tu iPhone la recibe automáticamente.",
+          "Compte l'utilisation des sessions cloud. Mettez la clé publique ci-dessous dans PTB_SYNC_PUBLIC_KEY de l'environnement cloud ; elle peut être partagée sans risque. La clé privée reste sur ce Mac et dans votre iCloud ; votre iPhone la reçoit automatiquement.",
+          "Conta o uso das sessões na nuvem. Coloque a chave pública abaixo em PTB_SYNC_PUBLIC_KEY do ambiente na nuvem; é seguro compartilhá-la. A chave privada fica neste Mac e no seu iCloud; seu iPhone a recebe automaticamente.")
     }
-    var cloudSessionsSecretLabel: String { t("공유 비밀값", "Shared secret", "共有シークレット", "Secreto compartido", "Secret partagé", "Segredo compartilhado") }
-    var cloudSessionsSecretPlaceholder: String { t("base64 32바이트", "base64, 32 bytes", "base64・32 バイト", "base64, 32 bytes", "base64, 32 octets", "base64, 32 bytes") }
-    var cloudSessionsGenerate: String { t("새로 만들기", "Generate", "生成", "Generar", "Générer", "Gerar") }
-    var cloudSessionsSave: String { t("저장", "Save", "保存", "Guardar", "Enregistrer", "Salvar") }
+    var cloudSessionsKeyLabel: String { t("공개 키", "Public key", "公開鍵", "Clave pública", "Clé publique", "Chave pública") }
+    var cloudSessionsGenerate: String { t("키 만들기", "Create key", "鍵を作成", "Crear clave", "Créer la clé", "Criar chave") }
     var cloudSessionsCopy: String { t("복사", "Copy", "コピー", "Copiar", "Copier", "Copiar") }
     var cloudSessionsRemove: String { t("제거", "Remove", "削除", "Quitar", "Supprimer", "Remover") }
-    var cloudSessionsConfigured: String { t("설정됨", "Configured", "設定済み", "Configurado", "Configuré", "Configurado") }
-    var cloudSessionsInvalidSecret: String {
-        t("base64 로 인코딩한 32바이트여야 합니다 (openssl rand -base64 32).",
-          "Must be 32 bytes encoded as base64 (openssl rand -base64 32).",
-          "base64 でエンコードした 32 バイトである必要があります (openssl rand -base64 32)。",
-          "Debe ser de 32 bytes codificados en base64 (openssl rand -base64 32).",
-          "Doit faire 32 octets encodés en base64 (openssl rand -base64 32).",
-          "Deve ter 32 bytes codificados em base64 (openssl rand -base64 32).")
+    var cloudSessionsKeyError: String {
+        t("키를 저장하지 못했습니다.", "Could not save the key.", "鍵を保存できませんでした。",
+          "No se pudo guardar la clave.", "Impossible d'enregistrer la clé.", "Não foi possível salvar a chave.")
     }
     func cloudSessionsLastPull(_ relative: String) -> String {
         t("마지막 확인 \(relative)", "Last checked \(relative)", "最終確認 \(relative)", "Última comprobación \(relative)", "Dernière vérification \(relative)", "Última verificação \(relative)")

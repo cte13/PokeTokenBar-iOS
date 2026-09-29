@@ -5,7 +5,7 @@ import PokeTokenBarShared
 // Claude Code on the web → Mac mirror, and Mac → iPhone usage ledger. CloudKit is injected out;
 // the production closures sit behind CloudSyncGate and `AppEnv.isBundledApp`.
 
-private let secret = Data((1...32).map(UInt8.init))
+private let deviceKey = Data((1...32).map(UInt8.init))
 private func line(_ id: String, _ date: Date, tokens: Int = 100) -> String {
     let ts = ISO8601DateFormatter().string(from: date)
     return #"{"type":"assistant","timestamp":"\#(ts)","requestId":"r\#(id)","message":{"id":"m\#(id)","model":"claude-opus-5-5","usage":{"input_tokens":\#(tokens),"output_tokens":0}}}"#
@@ -55,7 +55,7 @@ final class CloudSessionMirrorTests: XCTestCase {
     /// End to end on the Mac side: a record becomes a file that the Claude scan counts, attributed
     /// to the session from its path — including a subagent chunk, counted with its parent.
     func testPulledRecordsAreCountedByTheClaudeScanUnderTheirSession() async throws {
-        let crypto = try CloudSessionCrypto(secret: secret)
+        let crypto = try CloudSessionCrypto(privateKey: deviceKey)
         let now = Date()
         let records = [
             try record(crypto, rel: "proj/sess-1.jsonl", jsonl: line("1", now) + "\n", at: now),
@@ -74,7 +74,7 @@ final class CloudSessionMirrorTests: XCTestCase {
     }
 
     func testUnchangedRecordIsNotRewrittenAndTheNextPullOverlapsTheWatermark() async throws {
-        let crypto = try CloudSessionCrypto(secret: secret)
+        let crypto = try CloudSessionCrypto(privateKey: deviceKey)
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let rec = try record(crypto, rel: "p/s.jsonl", jsonl: "x\n", at: t0)
         let sinces = Calls<Date>()
@@ -89,11 +89,11 @@ final class CloudSessionMirrorTests: XCTestCase {
         XCTAssertEqual(values.last, t0.addingTimeInterval(-CloudSessionMirror.overlap))
     }
 
-    /// A record this secret cannot open is skipped — never written — but the watermark still
+    /// A record this key cannot open is skipped — never written — but the watermark still
     /// moves past it, or every pull would re-download it forever.
     func testForeignRecordIsRejectedAndSkippedPast() async throws {
-        let mine = try CloudSessionCrypto(secret: secret)
-        let theirs = try CloudSessionCrypto(secret: Data(repeating: 9, count: 32))
+        let mine = try CloudSessionCrypto(privateKey: deviceKey)
+        let theirs = try CloudSessionCrypto(privateKey: Data(repeating: 9, count: 32))
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let foreign = try record(theirs, rel: "p/s.jsonl", jsonl: "x\n", at: t0)
         let sinces = Calls<Date>()
@@ -109,7 +109,7 @@ final class CloudSessionMirrorTests: XCTestCase {
 
     /// A failed fetch (offline, missing index, gate disabled) must not advance anything.
     func testFailedFetchLeavesTheWatermarkAlone() async throws {
-        let crypto = try CloudSessionCrypto(secret: secret)
+        let crypto = try CloudSessionCrypto(privateKey: deviceKey)
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let sinces = Calls<Date>()
         let failing = CloudSessionMirror(root: root, fetch: { _, since in
@@ -123,16 +123,16 @@ final class CloudSessionMirrorTests: XCTestCase {
         XCTAssertEqual(values.last, t0.addingTimeInterval(600 - CloudSessionMirror.initialLookback))
     }
 
-    /// Changing the secret changes the channel: its history must be pulled from the start.
-    func testANewSecretStartsFromTheInitialLookback() async throws {
+    /// Changing the key changes the channel: its history must be pulled from the start.
+    func testANewKeyStartsFromTheInitialLookback() async throws {
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let sinces = Calls<Date>()
         let mirror = CloudSessionMirror(root: root, fetch: { _, since in await sinces.append(since); return [] })
-        _ = await mirror.pull(crypto: try CloudSessionCrypto(secret: secret), now: t0)
-        let rec = try record(try CloudSessionCrypto(secret: secret), rel: "p/s.jsonl", jsonl: "", at: t0)
+        _ = await mirror.pull(crypto: try CloudSessionCrypto(privateKey: deviceKey), now: t0)
+        let rec = try record(try CloudSessionCrypto(privateKey: deviceKey), rel: "p/s.jsonl", jsonl: "", at: t0)
         let withRecord = CloudSessionMirror(root: root, fetch: { _, since in await sinces.append(since); return [rec] })
-        _ = await withRecord.pull(crypto: try CloudSessionCrypto(secret: secret), now: t0)
-        _ = await withRecord.pull(crypto: try CloudSessionCrypto(secret: Data(repeating: 3, count: 32)), now: t0)
+        _ = await withRecord.pull(crypto: try CloudSessionCrypto(privateKey: deviceKey), now: t0)
+        _ = await withRecord.pull(crypto: try CloudSessionCrypto(privateKey: Data(repeating: 3, count: 32)), now: t0)
         let last = await sinces.values.last
         XCTAssertEqual(last, t0.addingTimeInterval(-CloudSessionMirror.initialLookback))
     }
@@ -149,16 +149,16 @@ final class CloudSessionMirrorTests: XCTestCase {
     }
 }
 
-final class CloudSessionSecretStoreTests: XCTestCase {
-    func testSaveRejectsAnInvalidSecretAndStoresAValidOneOwnerOnly() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-secret-\(UUID().uuidString)")
+final class CloudSessionKeyStoreTests: XCTestCase {
+    func testSaveRejectsAnInvalidKeyAndStoresAValidOneOwnerOnly() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-key-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = CloudSessionSecretStore(fileURL: dir.appendingPathComponent("s.txt"))
+        let store = CloudSessionKeyStore(fileURL: dir.appendingPathComponent("k.txt"))
         XCTAssertThrowsError(try store.save("short"))
         XCTAssertNil(store.load())
 
-        try store.save("  \(secret.base64EncodedString())\n")
-        XCTAssertEqual(store.load()?.channel, try CloudSessionCrypto(secret: secret).channel)
+        try store.save("  \(deviceKey.base64EncodedString())\n")
+        XCTAssertEqual(store.load()?.channel, try CloudSessionCrypto(privateKey: deviceKey).channel)
         let perms = try FileManager.default.attributesOfItem(atPath: store.fileURL.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(perms?.int16Value, 0o600)
         store.clear()
@@ -171,21 +171,43 @@ final class CloudSessionSecretStoreTests: XCTestCase {
 /// logging `Disabled` — running them here is the regression guard (defect log, CloudKit section).
 @MainActor
 final class CloudSessionSettingsTests: XCTestCase {
-    func testSaveValidatesStoresAndSyncsThroughTheGateAndClearRemoves() async throws {
+    func testGenerateStoresAKeyAndSyncsThroughTheGateAndClearRemovesIt() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-settings-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = CloudSessionSecretStore(fileURL: dir.appendingPathComponent("s.txt"))
+        let store = CloudSessionKeyStore(fileURL: dir.appendingPathComponent("k.txt"))
 
-        XCTAssertThrowsError(try CloudSessionSettings.save("nope", store: store))
         CloudSessionSettings.publish(store: store)   // nothing saved: no sync attempt
-        XCTAssertNil(store.loadRaw())
-
-        let secret = CloudSessionCrypto.generateSecret()
-        try CloudSessionSettings.save(secret, store: store)
-        XCTAssertEqual(store.loadRaw(), secret)
+        let publicKey = try CloudSessionSettings.generate(store: store)
+        XCTAssertEqual(store.load()?.publicKeyBase64, publicKey)
+        XCTAssertEqual(Data(base64Encoded: publicKey)?.count, 32)
         CloudSessionSettings.clear(store: store)
         XCTAssertNil(store.load())
         try await Task.sleep(nanoseconds: 100_000_000)   // let the gated sync tasks run
+    }
+
+    /// A reinstalled Mac has no local key: it adopts the one in iCloud, so records already sealed
+    /// to that key stay readable. A Mac that has a key keeps it, whatever iCloud holds.
+    func testLaunchAdoptsTheICloudKeyOnlyWhenThereIsNoLocalOne() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptb-launch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CloudSessionKeyStore(fileURL: dir.appendingPathComponent("k.txt"))
+        let remote = deviceKey.base64EncodedString()
+
+        let adopted = await CloudSessionSettings.syncAtLaunch(store: store, fetch: { remote })
+        XCTAssertTrue(adopted)
+        XCTAssertEqual(store.loadRaw(), remote)
+
+        try store.save(CloudSessionCrypto.generatePrivateKey())
+        let local = store.loadRaw()
+        let replaced = await CloudSessionSettings.syncAtLaunch(store: store, fetch: { remote })
+        XCTAssertFalse(replaced)
+        XCTAssertEqual(store.loadRaw(), local)
+
+        store.clear()
+        let nothing = await CloudSessionSettings.syncAtLaunch(store: store, fetch: { throw CloudSyncGate.Disabled() })
+        XCTAssertFalse(nothing)
+        XCTAssertNil(store.loadRaw())
+        try await Task.sleep(nanoseconds: 100_000_000)
     }
 
     func testMirrorReportsItsLastPull() async throws {
@@ -195,7 +217,7 @@ final class CloudSessionSettingsTests: XCTestCase {
         let lastBefore = await mirror.lastPull()
         XCTAssertNil(lastBefore)
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-        _ = await mirror.pull(crypto: try CloudSessionCrypto(secret: secret), now: t0)
+        _ = await mirror.pull(crypto: try CloudSessionCrypto(privateKey: deviceKey), now: t0)
         let lastAfter = await mirror.lastPull()
         XCTAssertEqual(lastAfter, t0)
     }

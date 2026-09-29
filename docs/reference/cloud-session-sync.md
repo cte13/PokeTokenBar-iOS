@@ -1,9 +1,9 @@
 ---
-summary: "How Claude Code on the web gets counted, and how the iPhone counts usage with the Mac off: the hook's wire format, the Mac mirror, the private-DB usage ledger, the phone overlay, CloudKit schema and setup, and the remaining phases (limits, companion)."
+summary: "How Claude Code on the web gets counted, and how the iPhone counts usage with the Mac off: why no secret lives in the cloud container, the hook's wire format and relay, the Mac mirror, the private-DB usage ledger, the phone overlay, CloudKit schema and setup, and the remaining phases (limits, companion)."
 read_when:
-  - Touching scripts/cloud-session-sync/, CloudSessionSync.swift, or the PokeTokenBarShared usage engine / ledger / overlay
+  - Touching scripts/cloud-session-sync/ (hook or relay), CloudSessionSync.swift, or the PokeTokenBarShared usage engine / ledger / overlay
   - Adding a provider to the phone ledger (`UsageProvider.phoneLedgerEntries`)
-  - Adding or changing a CloudKit record type (CloudUsage, UsageLedgerChunk, UsageLedgerManifest, CloudSessionSecret)
+  - Adding or changing a CloudKit record type (CloudUsage, UsageLedgerChunk, UsageLedgerManifest, CloudSessionKey)
   - Continuing Phase 2 (limits on the phone) or Phase 3 (companion on the phone)
 ---
 
@@ -22,7 +22,7 @@ Transport is CloudKit, container `iCloud.io.github.chattymin.poketokenbar` (owne
 ## Data flow
 
 ```
-cloud container ──hook──▶ public DB  CloudUsage (encrypted, per transcript chunk)
+cloud container ──hook──▶ relay (Cloudflare Worker) ──signed──▶ public DB  CloudUsage (sealed, per chunk)
                                 │                     │
                         Mac: CloudSessionMirror   iPhone/widget: PhoneUsageSync
                         writes files into a            │
@@ -42,34 +42,54 @@ companion) ──PhoneLedgerPublisher──▶ private DB  UsageLedgerChunk + Us
   through the Mac's ledger after the Mac mirrored it. Only entries merge without double counting
   (`dedupKeepMax` by `message.id|requestId`).
 
-## Hook → public DB (`scripts/cloud-session-sync/`)
+## No secret in the cloud container
+
+Cloud environment variables are readable by every session that uses the environment, including
+Claude and any command it runs. A session that gets prompt-injected could leak whatever is there.
+The environment's **API credentials** keep a key out of the session, but only as a fixed header the
+agent proxy attaches to requests for listed hosts. CloudKit Web Services instead needs a fresh ECDSA
+signature over the date and the body hash on every request. So:
+
+- **Confidentiality uses a device key pair.** The Mac creates an X25519 key pair. The container gets
+  only the public key (`PTB_SYNC_PUBLIC_KEY`, fine as a plain variable). The private key lives on the
+  Mac and in the user's private iCloud DB, where the iPhone reads it.
+- **Writes go through a relay.** `relay/worker.mjs` is a Cloudflare Worker that holds the CloudKit
+  signing key. Sessions call it with no secret of their own. The Bearer token is an environment API
+  credential for the relay's host, so the proxy attaches it and the session never sees it. The relay
+  accepts only `forceReplace` of well-formed `CloudUsage` records, so a leaked relay URL writes
+  nothing, and even a leaked token could only add records that look like usage.
+
+## Hook → relay → public DB (`scripts/cloud-session-sync/`)
 
 `ptb-cloud-sync.mjs` runs on Stop / SubagentStop / SessionEnd inside the cloud container. It trims
 the transcript and its `subagents/*.jsonl` down to usage lines, dedups per turn, chunks (5000),
-encrypts, and `forceReplace`s records through CloudKit Web Services with a server-to-server key.
-Only changed chunks upload. It never fails the turn; errors go to
-`~/.cache/poketokenbar-cloud-sync/log`. Tests: `node --test scripts/cloud-session-sync/`.
+seals each chunk to the device public key, and posts the records to `PTB_RELAY_URL/upload`. Only
+changed chunks upload. It never fails the turn; errors go to
+`~/.cache/poketokenbar-cloud-sync/log`. Tests:
+`node --test scripts/cloud-session-sync/ptb-cloud-sync.test.mjs scripts/cloud-session-sync/relay/worker.test.mjs`.
 
 Wire format (reader: `CloudSessionCrypto`):
 
-- Secret `S` = 32 random bytes, base64. Everything else is HMAC-SHA256(S, label):
-  encryption key `ptb-cloud-usage/enc/v1`; channel = hex(`ptb-cloud-usage/channel/v1`)[0..<32];
-  recordName = `cu_` + hex(`ptb-cloud-usage/record/v1|<rel>|<chunk>`)[0..<40].
-- Record `CloudUsage`: `channel` (String), `updatedAt` (Date — the container's clock), `payload`
-  (Bytes) = AES-256-GCM combined box over raw deflate of `{"v":1,"rel","chunk","jsonl"}`.
-- `rel` is validated on read (relative, no `.`/`..`/empty/hidden components, `.jsonl`), because
-  anyone with the container's API token can write public records.
+- Device key P = X25519 public key (32 bytes, base64 in the environment). The channel is
+  hex(SHA-256("ptb-cloud-usage/channel/v2" ‖ P))[0..<32], and recordName is
+  `cu_` + hex(SHA-256("ptb-cloud-usage/record/v2|<rel>|<chunk>" ‖ P))[0..<40].
+- Each record uses a fresh ephemeral key E. The payload is E.pub(32) ‖ nonce(12) ‖ AES-256-GCM
+  ciphertext ‖ tag(16), with key = HKDF-SHA256(X25519(E, P), salt E.pub ‖ P, info
+  "ptb-cloud-usage/seal/v2"). The ciphertext covers raw deflate of `{"v":2,"rel","chunk","jsonl"}`.
+- Record `CloudUsage`: `channel` (String), `updatedAt` (Date — the container's clock), `payload` (Bytes).
+- `rel` is validated on read (relative, no `.`/`..`/empty/hidden components, `.jsonl`).
 - `cost-state` lines are not sent. `applyReportedCost` spreads a session's cost over one file's
   entries, which would double count across chunks. Cloud turns are priced from `ModelPricing`.
 - The cross-language fixture is pinned on both sides: the Node test "fixture values for the Swift
-  test" and `CloudSessionCryptoTests`. Change both together.
+  test" and `CloudSessionCryptoTests` (Swift opens the box Node sealed). Change both together.
 
 ## Mac
 
-- `CloudSessionSecretStore`: 0600 file `cloud-session-secret.txt` in `AppStatePaths`, not Keychain
-  (see `CredentialFileProtection`). Settings → "Claude Code on the web" generates, pastes, copies or
-  removes it. Saving also writes it to the private DB (`CloudSessionSecret`), which is how the phone
-  gets it. It is written again at launch.
+- `CloudSessionKeyStore`: the device private key in a 0600 file `cloud-session-key.txt` in
+  `AppStatePaths`, not Keychain (see `CredentialFileProtection`). Settings → "Claude Code on the web"
+  creates the key pair, shows and copies the public key, and removes it. The private key is also
+  written to the private DB (`CloudSessionKey`), which is how the phone gets it. At launch the Mac
+  publishes its key, or adopts the one in iCloud if it has none (a reinstalled Mac).
 - `CloudSessionMirror`: started (not awaited) at the top of `UsageStore.refresh()`. It queries
   `channel == X AND updatedAt > watermark − 10 min` (the first pull reaches back 40 days), writes
   each chunk to `<state>/cloud-sessions/c<chunk>/<rel>` only if the bytes changed, and triggers one
@@ -109,26 +129,33 @@ cached count.
 ## CloudKit schema and one-time setup
 
 Record types: public `CloudUsage`; private `UsageLedgerChunk`, `UsageLedgerManifest`,
-`CloudSessionSecret` (and the existing `Payload`). In Development, each type is created the first
-time it is written. **Before any production build, deploy the schema to Production**, and point the
-hook's `PTB_CLOUDKIT_ENV` at `production`.
+`CloudSessionKey` (and the existing `Payload`). In Development, each type is created the first
+time it is written. **Before any production build, deploy the schema to Production**, and set the
+relay's `CLOUDKIT_ENV` (in `wrangler.toml`) to `production`.
 
-1. `openssl ecparam -name prime256v1 -genkey -noout -out ptb-cloudkit.pem`;
-   `openssl ec -in ptb-cloudkit.pem -pubout`.
+1. CloudKit signing key (PKCS#8, which the relay's WebCrypto needs):
+   `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ptb-cloudkit.pem`;
+   `openssl pkey -in ptb-cloudkit.pem -pubout`.
 2. CloudKit Console → container → Development → Tokens & Keys → Server-to-Server Keys → add the
    public key; note the Key ID.
-3. Mac Settings → Claude Code on the web → Generate → Copy (or `openssl rand -base64 32` and paste).
-4. Cloud environment: env vars `PTB_SYNC_SECRET`, `PTB_CLOUDKIT_KEY_ID`, `PTB_CLOUDKIT_PRIVATE_KEY`
-   (PEM or base64 of the PEM); optionally `PTB_CLOUDKIT_ENV` (default `development`) and
-   `PTB_CLOUDKIT_CONTAINER`. Allow `api.apple-cloudkit.com` under network access. Setup script:
+3. Relay: `cd scripts/cloud-session-sync/relay`, `npx wrangler login`, `npx wrangler deploy`, then
+   `npx wrangler secret put` for `CLOUDKIT_KEY_ID`, `CLOUDKIT_PRIVATE_KEY` (the PEM) and
+   `RELAY_TOKEN` (`openssl rand -hex 32`). Note the `*.workers.dev` URL.
+4. Mac Settings → Claude Code on the web → Create key → Copy (the public key).
+5. Cloud environment: environment variables `PTB_SYNC_PUBLIC_KEY` and `PTB_RELAY_URL` (both
+   public). Add an **API credential** for the relay's host with header `Authorization`, prefix `Bearer`,
+   and the `RELAY_TOKEN` as its value. Setup script:
    `curl -fsSL https://raw.githubusercontent.com/cte13/PokeTokenBar-iOS/main/scripts/cloud-session-sync/install.sh | bash`
-5. After the first cloud turn: Console → Schema → Indexes → `CloudUsage`: `channel` QUERYABLE,
+6. After the first cloud turn: Console → Schema → Indexes → `CloudUsage`: `channel` QUERYABLE,
    `updatedAt` QUERYABLE + SORTABLE, `recordName` QUERYABLE. Without them the Mac and phone queries
    fail, and the Mac logs `cloud sessions: pull failed`.
 
 ## Known limits
 
-- Public records accumulate. Pruning (e.g. delete records older than ~40 days) is not built yet.
+- Public records accumulate. Pruning (e.g. delete records older than ~40 days) is not built yet; it
+  would be a relay endpoint too.
+- API credentials exist only on Pro and Max plans. On Team or Enterprise the relay token would have
+  to be an environment variable, readable by sessions.
 - The hook runs synchronously in Stop (about one request, 20 s cap). Concurrent Stop and
   SubagentStop hooks can race on `uploaded.json`; the worst case is a redundant upload.
 - Cloud entries reach the phone's count only while the Mac's manifest lists Claude. A phone paired

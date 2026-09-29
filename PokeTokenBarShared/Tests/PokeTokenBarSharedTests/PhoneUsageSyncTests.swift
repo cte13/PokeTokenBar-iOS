@@ -5,7 +5,7 @@ import Testing
 /// A scriptable stand-in for CloudKit. Counts what the sync asks for, so tests can check that
 /// unchanged chunks are not fetched again.
 private actor FakeCloud {
-    var secret: String?
+    var privateKey: String?
     var manifest: PhoneUsageLedgerManifest?
     var chunks: [String: Data] = [:]
     var cloud: [UsageCloudKit.CloudSessionRecord] = []
@@ -17,7 +17,7 @@ private actor FakeCloud {
         self.manifest = manifest
         self.chunks = Dictionary(chunks.map { ($0.recordName, $0.payload) }, uniquingKeysWith: { a, _ in a })
     }
-    func set(secret: String?) { self.secret = secret }
+    func set(privateKey: String?) { self.privateKey = privateKey }
     func set(cloud: [UsageCloudKit.CloudSessionRecord]) { self.cloud = cloud }
     func set(manifestFails: Bool) { self.manifestFails = manifestFails }
 
@@ -36,7 +36,7 @@ private actor FakeCloud {
 
     nonisolated var remote: PhoneUsageSync.Remote {
         PhoneUsageSync.Remote(
-            fetchSecret: { await self.secret },
+            fetchPrivateKey: { await self.privateKey },
             fetchManifest: { try await self.fetchManifest() },
             fetchChunks: { await self.fetchChunks($0) },
             fetchCloudRecords: { _, since in await self.fetchCloud(since) })
@@ -46,7 +46,7 @@ private actor FakeCloud {
 private let fmt = UsageAggregation.localDayFormatter()
 private let now = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 16, hour: 12))!
 private let claude = PhoneUsageLedgerManifest.Provider(id: "claude_code", displayName: "Claude Code", reportsCost: true)
-private let secret = Data((1...32).map(UInt8.init))
+private let deviceKey = Data((1...32).map(UInt8.init))
 
 private func entry(_ id: String, _ date: Date, tokens: Int = 100) -> UsageEntry {
     UsageEntry(id: id, date: date, localDay: fmt.string(from: date), model: "claude-opus-5-5",
@@ -87,9 +87,9 @@ struct PhoneUsageSyncTests {
         let cloud = FakeCloud()
         let shared = entry("both|both", now.addingTimeInterval(-3600))  // Claude ids are message.id|requestId
         try await publish(cloud, [shared, entry("mac-only", now.addingTimeInterval(-7200))])
-        let crypto = try CloudSessionCrypto(secret: secret)
+        let crypto = try CloudSessionCrypto(privateKey: deviceKey)
         let jsonl = claudeLine("both", shared.date) + "\n" + claudeLine("cloud-only", now.addingTimeInterval(-60)) + "\n"
-        await cloud.set(secret: secret.base64EncodedString())
+        await cloud.set(privateKey: deviceKey.base64EncodedString())
         await cloud.set(cloud: [UsageCloudKit.CloudSessionRecord(
             recordName: crypto.recordName(rel: "p/s.jsonl", chunk: 0), updatedAt: now,
             payload: try crypto.seal(CloudSessionPayload(rel: "p/s.jsonl", chunk: 0, jsonl: jsonl)))])
@@ -153,21 +153,21 @@ struct PhoneUsageSyncTests {
     @Test func cloudPullsOverlapTheWatermarkAndANewSecretStartsOver() async throws {
         let cloud = FakeCloud()
         try await publish(cloud, [])
-        let crypto = try CloudSessionCrypto(secret: secret)
-        await cloud.set(secret: secret.base64EncodedString())
+        let crypto = try CloudSessionCrypto(privateKey: deviceKey)
+        await cloud.set(privateKey: deviceKey.base64EncodedString())
         await cloud.set(cloud: [UsageCloudKit.CloudSessionRecord(
             recordName: "cu_x", updatedAt: now,
             payload: try crypto.seal(CloudSessionPayload(rel: "p/s.jsonl", chunk: 0, jsonl: claudeLine("c", now) + "\n")))])
         let sync = PhoneUsageSync(directory: dir, remote: cloud.remote)
         await sync.syncLedger(now: now)
         await sync.syncLedger(now: now)
-        await cloud.set(secret: Data(repeating: 5, count: 32).base64EncodedString())
+        await cloud.set(privateKey: Data(repeating: 5, count: 32).base64EncodedString())
         await sync.syncLedger(now: now)
 
         let since = await cloud.cloudSince
         #expect(since == [now.addingTimeInterval(-PhoneUsageSync.cloudRetention),
                           now.addingTimeInterval(-PhoneUsageSync.cloudOverlap),
                           now.addingTimeInterval(-PhoneUsageSync.cloudRetention)])
-        #expect(await sync.display(now: now)?.todayTokens == 0, "the old secret's record no longer opens")
+        #expect(await sync.display(now: now)?.todayTokens == 0, "the old key's record no longer opens")
     }
 }

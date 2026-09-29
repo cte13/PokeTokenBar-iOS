@@ -64,6 +64,8 @@ PokeTokenBar는 당신이 이미 태우고 있는 AI 코딩 토큰(Claude Code �
 - **홈 & 잠금 화면 위젯**:
   - **홈 화면(중간 크기)**: 실시간 토큰 사용량, 비용, companion 아이콘, 프로바이더별 한도 게이지.
   - **잠금 화면**: 원형 companion 스프라이트, 직사각형 진화/경험치 바, 인라인 토큰 요약.
+- **Mac이 꺼져 있어도 직접 집계**: Mac이 Claude 사용량 원장을 개인 iCloud 데이터베이스에 올리고, iPhone과 위젯이 이를 바탕으로 오늘/주/월 토큰·비용·burn rate를 직접 다시 계산합니다 — Mac이 잠자는 동안에도 숫자가 최신으로 유지됩니다.
+- **웹의 Claude Code**: 웹의 Claude Code 세션은 일회용 클라우드 컨테이너에서 실행되어 로그가 Mac에 닿지 않습니다. 선택형 훅이 매 턴의 사용량을 Mac과 iPhone만 가진 키로 암호화해 올리고, 두 기기가 로컬 사용량과 함께 집계합니다. 설정 방법은 [`docs/reference/cloud-session-sync.md`](docs/reference/cloud-session-sync.md)(Mac 설정 → Claude Code on the web)를 참고하세요.
 - **iCloud CloudKit & 로컬 동기화**:
   - **iCloud(기본)**: 갱신 시마다 개인 iCloud 저장소로 암호화된 스냅샷을 푸시 — 별도 설정 없이 셀룰러나 다른 Wi-Fi에서도 완벽 작동.
   - **로컬 네트워크 폴백**: 같은 Wi-Fi 환경에서는 페어링 코드로 보안된 로컬 HTTP/Bonjour 엔드포인트 지원.

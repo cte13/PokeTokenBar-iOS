@@ -496,6 +496,17 @@ read_when:
 
 ## 외부 동기화 (iCloud·CloudKit)
 
+- **CloudKit 의 "첫 쓰기에 레코드 타입 자동 생성"은 앱 쓰기에만 해당한다 — server-to-server 키 쓰기는 아니다.**
+  클라우드 세션 릴레이(`scripts/cloud-session-sync/relay/`)가 Web Services 로 `CloudUsage` 를 쓰자
+  `NOT_FOUND could not find record_type with name 'CloudUsage'` 로 매번 실패했다(2026-09-29 실측). 같은 날
+  Mac 앱이 쓴 `UsageLedgerChunk`·`CloudSessionKey` 는 자동 생성됐다. 근본원인: 핸드오프가 이 동작을
+  "미검증"으로 적어 뒀는데 셋업 문서가 그걸 사실처럼 옮겼다. 테스트가 못 거른 이유: 릴레이 테스트는
+  CloudKit 을 스텁으로 대신하므로 스키마 존재를 확인할 수 없다 — 이런 전제는 테스트가 아니라 **첫 실기기
+  셋업**에서만 확인된다. 규칙: 외부 서비스 동작에 기댄 셋업 단계는 실측 전엔 "미검증"으로 남기고, 실패 시의
+  오류 문구를 문서에 같이 적는다(`cloud-session-sync.md` 6단계). 같은 셋업의 진단 공백도 하나: 훅이 **오류일
+  때만** 로그를 써서 "정상 / 미실행 / 미설정"이 구분되지 않았다 → 매 실행 한 줄 `status` 파일로 고침
+  (`run()` 테스트가 각 결과를 고정).
+
 - **CloudKit 쓰기를 'fetch → 수정 → save'로 만들지 마라 — last-write-wins면 `.allKeys` 덮어쓰기 한 방이다.**
   fetch가 일시적 오류로 실패하면 `try?`가 삼키고 "레코드 없음"으로 재해석해 같은 recordName의 *새*
   CKRecord를 insert한다. 레코드가 이미 서버에 있으면 `serverRecordChanged`("record to insert already

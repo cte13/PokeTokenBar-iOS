@@ -21,8 +21,10 @@
 //   PTB_SYNC_PUBLIC_KEY   base64 of the 32-byte X25519 public key shown in the Mac app's Settings
 //   PTB_RELAY_URL         the relay's URL, e.g. https://ptb-cloud-relay.<you>.workers.dev
 //
-// The hook never fails the turn: every error is logged to ~/.cache/poketokenbar-cloud-sync/log
-// and the process exits 0.
+// The hook never fails the turn: it always exits 0. Every run overwrites
+// ~/.cache/poketokenbar-cloud-sync/status with one line saying what happened (uploaded, up to
+// date, skipped and why, or failed), so `cat` of that file answers "did it run, and did it work?".
+// Uploads and errors are also appended to ~/.cache/poketokenbar-cloud-sync/log.
 
 import { createHash, createCipheriv, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes } from 'node:crypto';
 import { deflateRawSync } from 'node:zlib';
@@ -169,11 +171,20 @@ function postToRelay(relayURL, records) {
 // ── Hook entry ──────────────────────────────────────────────────────────────────────────────
 
 const stateDir = () => path.join(os.homedir(), '.cache', 'poketokenbar-cloud-sync');
-function log(message) {
+function log(message, dir = stateDir()) {
   try {
-    fs.mkdirSync(stateDir(), { recursive: true });
-    fs.appendFileSync(path.join(stateDir(), 'log'), `${new Date().toISOString()} ${message}\n`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'log'), `${new Date().toISOString()} ${message}\n`);
   } catch { /* logging must never fail the hook */ }
+}
+
+/// One line, overwritten every run. Before this existed the hook only wrote on errors, so a
+/// missing log could mean "working", "never ran" or "not configured" — indistinguishable.
+export function writeStatus(message, dir = stateDir()) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'status'), `${new Date().toISOString()} ${message}\n`);
+  } catch { /* status must never fail the hook */ }
 }
 
 /// The session's own transcript plus its subagent transcripts, each with its path relative to
@@ -219,30 +230,48 @@ async function readStdin() {
   return data;
 }
 
-async function main() {
-  const env = process.env;
-  if (!env.PTB_SYNC_PUBLIC_KEY || !env.PTB_RELAY_URL) return;
-  const input = JSON.parse((await readStdin()) || '{}');
+/// One hook run. Returns the status line; never throws for an expected condition.
+export async function run({ env, input, dir = stateDir(), post = postToRelay }) {
+  if (!env.PTB_SYNC_PUBLIC_KEY || !env.PTB_RELAY_URL) {
+    return 'skipped: PTB_SYNC_PUBLIC_KEY or PTB_RELAY_URL is not set in this cloud environment';
+  }
   const transcriptPath = input.transcript_path;
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return 'skipped: no transcript for this session yet';
 
   const publicKey = parsePublicKey(env.PTB_SYNC_PUBLIC_KEY);
-  const statePath = path.join(stateDir(), 'uploaded.json');
+  const statePath = path.join(dir, 'uploaded.json');
   let uploaded = {};
   try { uploaded = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { /* first run */ }
 
   const records = pendingRecords(publicKey, sessionFiles(transcriptPath), uploaded);
-  if (records.length === 0) return;
+  if (records.length === 0) return 'up to date: nothing new to upload';
 
+  let rejected = 0;
   for (let i = 0; i < records.length; i += MAX_RECORDS_PER_REQUEST) {
     const batch = records.slice(i, i + MAX_RECORDS_PER_REQUEST);
-    const failed = postToRelay(env.PTB_RELAY_URL, batch);
+    const failed = post(env.PTB_RELAY_URL, batch);
+    rejected += failed.size;
     for (const r of batch) if (!failed.has(r.recordName)) uploaded[r.recordName] = r.digest;
   }
-  fs.mkdirSync(stateDir(), { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(uploaded));
+  const message = `uploaded ${records.length - rejected} record(s)` +
+    (rejected ? `, ${rejected} rejected by CloudKit (see log)` : '');
+  log(message, dir);
+  return message;
+}
+
+async function main() {
+  let status;
+  try {
+    status = await run({ env: process.env, input: JSON.parse((await readStdin()) || '{}') });
+  } catch (err) {
+    log(`sync failed: ${err?.stack ?? err}`);
+    status = `failed: ${String(err?.message ?? err).split('\n')[0]} (see log)`;
+  }
+  writeStatus(status);
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => log(`sync failed: ${err?.stack ?? err}`)).finally(() => process.exit(0));
+  main().finally(() => process.exit(0));
 }

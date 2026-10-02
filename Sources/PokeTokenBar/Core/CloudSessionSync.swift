@@ -179,6 +179,10 @@ actor PhoneLedgerPublisher {
     private let stateURL: URL
     private let upload: Publish
     private var inFlight = false
+    /// The newest sources that arrived while an upload was running. Dropping them used to delay a
+    /// cloud turn's arrival on the phone by a whole refresh interval — the pull that mirrors a cloud
+    /// record triggers a refresh whose publish lands exactly while the previous one is uploading.
+    private var pending: [Source]?
 
     init(stateURL: URL = AppStatePaths.directory().appendingPathComponent("phone-ledger-manifest.json"),
          upload: @escaping Publish = { try await CloudSyncGate.publishLedger(chunks: $0, deleting: $1, manifest: $2) }) {
@@ -186,15 +190,28 @@ actor PhoneLedgerPublisher {
         self.upload = upload
     }
 
-    /// Returns how many chunks were uploaded, or nil when nothing was attempted (in flight,
-    /// unchanged) or the upload failed. A failure leaves the saved manifest untouched, so the
-    /// next refresh retries the same chunks.
+    /// Returns how many chunks were uploaded, or nil when nothing was attempted (unchanged, or
+    /// queued behind a running upload) or the upload failed. A failure leaves the saved manifest
+    /// untouched, so the next refresh retries the same chunks. Sources that arrive mid-upload are
+    /// kept (newest wins) and published as soon as that upload finishes.
     @discardableResult
     func publish(_ sources: [Source], now: Date = Date()) async -> Int? {
-        guard !inFlight else { return nil }
+        guard !inFlight else {
+            pending = sources
+            return nil
+        }
         inFlight = true
         defer { inFlight = false }
+        let result = await publishOnce(sources, now: now)
+        while let next = pending {
+            pending = nil
+            await publishOnce(next, now: Date())
+        }
+        return result
+    }
 
+    @discardableResult
+    private func publishOnce(_ sources: [Source], now: Date) async -> Int? {
         var chunks: [PhoneUsageLedger.Chunk] = []
         do {
             for source in sources {

@@ -16,6 +16,30 @@ private actor Calls<T: Sendable> {
     func append(_ v: T) { values.append(v) }
 }
 
+/// Holds the first upload open until released, so a second publish can arrive mid-upload.
+private actor UploadGate {
+    private var started = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func waitIfFirst() async {
+        guard !started else { return }
+        started = true
+        if released { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func untilFirstStarted() async throws {
+        for _ in 0..<200 where !started { try await Task.sleep(nanoseconds: 5_000_000) }
+    }
+
+    func release() {
+        released = true
+        waiter?.resume()
+        waiter = nil
+    }
+}
+
 private final class LedgerProvider: UsageProvider, @unchecked Sendable {
     let id: String
     let displayName: String
@@ -285,6 +309,30 @@ final class PhoneLedgerPublisherTests: XCTestCase {
         let values = await uploads.values
         XCTAssertEqual(values.last?.providers, [])
         XCTAssertEqual(values.last?.deleting, ["ul_claude_code_2026-09-15_0"])
+    }
+
+    /// The trigger from the live run (2026-09-29): the pull that mirrored a cloud record started a
+    /// refresh whose publish arrived while the previous upload was still running, and was dropped —
+    /// the cloud turn reached the phone one refresh (2 min) late. It must run right after instead.
+    func testAPublishArrivingMidUploadRunsWhenThatUploadFinishes() async throws {
+        let gate = UploadGate()
+        let uploads = Calls<[String]>()
+        let publisher = PhoneLedgerPublisher(stateURL: stateURL, upload: { chunks, _, _ in
+            await gate.waitIfFirst()
+            await uploads.append(chunks.map(\.recordName))
+        })
+        let firstSources: [PhoneLedgerPublisher.Source] = [.init(provider: provider, entries: [entry("a", 15)])]
+        let first = Task { await publisher.publish(firstSources) }
+        try await gate.untilFirstStarted()
+
+        let queued = await publisher.publish([.init(provider: provider, entries: [entry("a", 15), entry("cloud", 16)])])
+        XCTAssertNil(queued, "queued behind the running upload")
+        await gate.release()
+        _ = await first.value
+
+        let values = await uploads.values
+        XCTAssertEqual(values, [["ul_claude_code_2026-09-15_0"], ["ul_claude_code_2026-09-16_0"]],
+                       "the queued sources were published as soon as the first upload finished")
     }
 
     func testNothingToPublishOnAFreshMacMakesNoCall() async {

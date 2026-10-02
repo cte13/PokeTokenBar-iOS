@@ -1,4 +1,5 @@
 import Foundation
+import PokeTokenBarShared
 
 /// claude.ai 세션 쿠키(`sessionKey`)로 공식 한도를 조회하는 경로.
 ///
@@ -29,24 +30,11 @@ protocol SessionKeyHTTPClient: Sendable {
 }
 
 struct URLSessionSessionKeyClient: SessionKeyHTTPClient {
-    /// claude.ai 는 브라우저에서 오는 요청만 기대한다 — Origin/Referer/UA 가 없으면 거절될 수 있다.
-    private static let userAgent =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
-        "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-
     func get(_ url: URL, sessionKey: String) async throws -> SessionKeyHTTPResponse {
         // Tests inject their own `SessionKeyHTTPClient`, so this only stops real calls.
         guard AppEnv.allowsLiveLimitsFetch else { throw LimitsError.liveFetchNotPermitted }
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        // 쿠키를 헤더로 직접 넣는다. 공유 저장소가 개입하면 이 헤더를 덮어써 인증이 뒤바뀔 수 있다.
-        request.httpShouldHandleCookies = false
-        request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://claude.ai", forHTTPHeaderField: "Referer")
-        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Headers are built in one place, shared with the iPhone (`ClaudeWebUsage.request`).
+        let (data, response) = try await URLSession.shared.data(for: ClaudeWebUsage.request(url, sessionKey: sessionKey))
         let http = response as? HTTPURLResponse
         return SessionKeyHTTPResponse(
             status: http?.statusCode ?? -1,
@@ -154,7 +142,7 @@ struct SessionKeyLimitsProvider: ClaudeLimitsProviding, SessionKeyManaging {
     /// 기본 인스턴스 — 한도 조회 체인과 설정 화면이 같은 파일·같은 조직 캐시를 봐야 한다.
     static let shared = SessionKeyLimitsProvider()
 
-    private static let base = URL(string: "https://claude.ai/api")!
+    private static let base = ClaudeWebUsage.base
 
     private let store: SessionKeyStore
     private let http: any SessionKeyHTTPClient
@@ -253,8 +241,7 @@ struct SessionKeyLimitsProvider: ClaudeLimitsProviding, SessionKeyManaging {
     }
 
     private func usage(organizationID: String, sessionKey: String) async throws -> LimitStatus {
-        let url = Self.base.appendingPathComponent("organizations")
-            .appendingPathComponent(organizationID).appendingPathComponent("usage")
+        let url = ClaudeWebUsage.usageURL(organizationID: organizationID)
         let response = try await http.get(url, sessionKey: sessionKey)
         try Self.mapFailure(response)
         return try JSONDecoder().decode(LimitStatus.self, from: response.data)

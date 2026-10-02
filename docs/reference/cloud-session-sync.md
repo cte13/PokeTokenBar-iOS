@@ -179,13 +179,31 @@ deploy the schema to Production**, and set the relay's `CLOUDKIT_ENV` (in `wrang
 
 ## Remaining phases (owner approved 2026-09-28)
 
-### Phase 2: official limits on the phone
+### Phase 2: official Claude limits on the phone (built)
 
-The phone fetches Claude limits itself through the claude.ai **session key** path
-(`SessionKeyLimitsProvider`; move the fetch to Shared). The key reaches the phone via the private DB.
-Never copy the Claude Code OAuth token: its refresh rotation would fight the CLI on the Mac. Whichever
-device fetched last publishes, and both show the freshest. Other providers' limits stay Mac-only.
-Consider showing `extra_usage` (credits) once a real enabled response is captured.
+- The Mac shares its claude.ai **session key** and the organization it resolved, as private-DB
+  record `ClaudeSessionKey` (`UsageStore.shareSessionKeyIfChanged`, after each limits fetch). It
+  shares again only when the pair changes. Removing the key deletes the record, and a failed share
+  retries at the next refresh. The Claude Code OAuth token is never shared: its refresh rotation
+  would fight the CLI on the Mac. A Mac with no session key (OAuth only) shares nothing, and the
+  phone keeps showing the Mac's last limits.
+- The phone sends the Mac's exact request (`ClaudeWebUsage.request` builds the headers for both
+  devices) to `/api/organizations/{org}/usage`, at most once per `LimitsPollCadence.minimumInterval`
+  across the app and the widget (`PhoneUsageSync.syncClaudeLimits`):
+  - On 401 it stops until the Mac shares a new key.
+  - On 403 (lost access, or a Cloudflare challenge; the phone can't tell which) it backs off 30
+    minutes. On 429 it backs off per Retry-After, defaulting to 10 minutes.
+  - It never rediscovers organizations; that stays on the Mac.
+- `PhoneClaudeLimits.windows` is the one Claude-window mapping. The Mac uses it with its
+  localized labels, and the phone uses it with the labels the Mac last sent, matching per-model
+  windows by `PhoneLimitWindow.scopeModel`, never by localized text. The phone's limits replace
+  the Mac's only while they are newer than the Mac payload.
+- The limit models (`LimitStatus`, `LimitWindow`, `OAuthLimitEntry`), `LimitsPollCadence` and the
+  5-hour depletion math (`ClaudeLimitForecast`) moved to `PokeTokenBarShared/ClaudeLimits.swift`.
+- Not built: recomputing the 5-hour depletion forecast on the phone, and other providers' limits
+  (they stay Mac-only). `extra_usage` (credits) is still ignored.
+- Owner step: Mac Settings → Advanced → claude.ai session key. Paste the `sessionKey` cookie from
+  a browser logged in to claude.ai. Keys expire every few weeks, and the app shows an expiry badge.
 
 ### Phase 3: companion progress on the phone
 

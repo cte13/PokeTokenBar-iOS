@@ -459,28 +459,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                                  windowDuration: bucket.is5HourWindow ? 5 * 3600 : (bucket.isWeeklyWindow ? 7 * 24 * 3600 : nil))
             }
         }
-        let scoped: [PhoneLimitWindow] = (limits?.scopedLimitEntries ?? []).compactMap { entry in
-            guard let percent = entry.percent else { return nil }
-            return PhoneLimitWindow(
-                label: l.phoneClaudeScoped(model: entry.scope?.model?.displayName),
-                utilization: percent,
-                resetsAt: entry.resetsAt.flatMap { ISO8601Parser.date(from: $0) },
-                windowDuration: 7 * 24 * 3600)
-        }
+        // Claude windows come from the one mapping the iPhone also uses for its own fetch.
+        let language = l.lang
+        let claude = PhoneClaudeLimits.windows(limits, labels: PhoneClaudeLimits.Labels(
+            fiveHour: l.phoneClaude5h, weekly: l.phoneClaudeWeekly,
+            opusWeekly: l.phoneClaudeOpusWeekly, sonnetWeekly: l.phoneClaudeSonnetWeekly,
+            scoped: { L(language).phoneClaudeScoped(model: $0) }))
         return PhoneLimitStatus(
-            claude5h: limits?.fiveHour?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaude5h, utilization: $0, resetsAt: limits?.fiveHour?.resetDate, windowDuration: 5 * 3600)
-            },
-            claudeWeekly: limits?.sevenDay?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeWeekly, utilization: $0, resetsAt: limits?.sevenDay?.resetDate, windowDuration: 7 * 24 * 3600)
-            },
-            claudeOpusWeekly: limits?.sevenDayOpus?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeOpusWeekly, utilization: $0, resetsAt: limits?.sevenDayOpus?.resetDate, windowDuration: 7 * 24 * 3600)
-            },
-            claudeSonnetWeekly: limits?.sevenDaySonnet?.utilization.map {
-                PhoneLimitWindow(label: l.phoneClaudeSonnetWeekly, utilization: $0, resetsAt: limits?.sevenDaySonnet?.resetDate, windowDuration: 7 * 24 * 3600)
-            },
-            claudeScoped: scoped.isEmpty ? nil : scoped,
+            claude5h: claude.fiveHour,
+            claudeWeekly: claude.weekly,
+            claudeOpusWeekly: claude.opusWeekly,
+            claudeSonnetWeekly: claude.sonnetWeekly,
+            claudeScoped: claude.scoped,
             codexPrimary: codex?.maxPrimaryUsedPercent.map {
                 PhoneLimitWindow(label: l.phoneCodex, utilization: Double($0), resetsAt: codexPrimaryWindow?.resetDate,
                                  windowDuration: codexPrimaryWindow?.windowDurationMins.map { TimeInterval($0) * 60 })

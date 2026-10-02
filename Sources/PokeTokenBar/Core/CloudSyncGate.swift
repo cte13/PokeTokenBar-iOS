@@ -69,6 +69,13 @@ enum CloudSyncGate {
         try await UsageCloudKit.deleteCloudSessionKey()
     }
 
+    /// nil deletes the shared key (the user removed it on this Mac).
+    static func shareClaudeSessionKey(_ key: SharedClaudeSessionKey?) async throws {
+        guard allowed() else { throw Disabled() }
+        if let key { try await UsageCloudKit.saveClaudeSessionKey(key) }
+        else { try await UsageCloudKit.deleteClaudeSessionKey() }
+    }
+
     /// 비허용이면 한 번만 로그를 남긴다 — save 는 매 refresh 마다 불리므로 반복 기록하지 않는다.
     private static func allowed() -> Bool {
         if hasICloudEntitlement { return true }

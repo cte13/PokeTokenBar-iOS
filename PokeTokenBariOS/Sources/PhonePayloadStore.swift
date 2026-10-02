@@ -137,7 +137,11 @@ final class PhonePayloadStore {
             }
         }
 
-        let ledgerSynced = iCloudAvailable ? await sync.syncLedger() : false
+        // The ledger (usage) and the Claude limits (claude.ai, with the key the Mac shares) are
+        // independent; neither waits for the other.
+        async let ledger = iCloudAvailable ? sync.syncLedger() : false
+        async let claudeLimits = iCloudAvailable ? sync.syncClaudeLimits() : false
+        let (ledgerSynced, _) = await (ledger, claudeLimits)
         guard delivered != nil || ledgerSynced, let shown = await sync.display() else {
             if payload == nil {
                 lastError = fetchError ?? String(localized: "No data source available")

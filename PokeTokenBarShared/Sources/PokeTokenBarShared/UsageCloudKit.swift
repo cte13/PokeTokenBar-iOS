@@ -130,6 +130,40 @@ public enum UsageCloudKit {
                          in: CloudKitSync.container.privateCloudDatabase)
     }
 
+    // MARK: - claude.ai session key (private DB)
+
+    static let claudeKeyRecordType = "ClaudeSessionKey"
+    static let claudeKeyRecordName = "ClaudeSessionKeyCurrent"
+
+    /// The Mac's claude.ai session key and the organization it resolved, so the iPhone can fetch
+    /// Claude's limits itself (`PhoneUsageSync.syncClaudeLimits`). Never the Claude Code OAuth
+    /// token: its refresh rotation would fight the CLI on the Mac.
+    public static func saveClaudeSessionKey(_ key: SharedClaudeSessionKey) async throws {
+        let record = CKRecord(recordType: claudeKeyRecordType, recordID: CKRecord.ID(recordName: claudeKeyRecordName))
+        record["key"] = key.key
+        record["organizationID"] = key.organizationID
+        try await modify(save: [record], delete: [], in: CloudKitSync.container.privateCloudDatabase)
+    }
+
+    public static func fetchClaudeSessionKey() async throws -> SharedClaudeSessionKey? {
+        do {
+            let record = try await CloudKitSync.container.privateCloudDatabase
+                .configuredWith(configuration: operationConfiguration()) {
+                    try await $0.record(for: CKRecord.ID(recordName: claudeKeyRecordName))
+                }
+            guard let key = record["key"] as? String, let org = record["organizationID"] as? String,
+                  !key.isEmpty, !org.isEmpty else { return nil }
+            return SharedClaudeSessionKey(key: key, organizationID: org)
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        }
+    }
+
+    public static func deleteClaudeSessionKey() async throws {
+        try await modify(save: [], delete: [CKRecord.ID(recordName: claudeKeyRecordName)],
+                         in: CloudKitSync.container.privateCloudDatabase)
+    }
+
     // MARK: - Cloud-session records (public)
 
     public struct CloudSessionRecord: Sendable, Equatable {
@@ -202,5 +236,15 @@ public enum UsageCloudKit {
             }
             database.add(operation)
         }
+    }
+}
+
+public struct SharedClaudeSessionKey: Codable, Sendable, Equatable {
+    public let key: String
+    public let organizationID: String
+
+    public init(key: String, organizationID: String) {
+        self.key = key
+        self.organizationID = organizationID
     }
 }

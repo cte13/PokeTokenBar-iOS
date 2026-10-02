@@ -229,6 +229,22 @@ struct PhonePayloadTests {
         #expect(operation.recordIDsToDelete?.isEmpty == true)
     }
 
+    /// At CloudKit's default `.utility`, requests from a menu-bar app are discretionary and the
+    /// system holds them while the MacBook is on battery — the phone payload and the usage ledger
+    /// stopped reaching iCloud (2026-10-02). Every operation must use the shared configuration:
+    /// non-discretionary, and capped so a stuck one fails instead of stalling for 7 days.
+    @Test func everyCloudKitOperationIsNonDiscretionaryAndTimeBounded() throws {
+        let payloadSave = CloudKitSync.makeSaveOperation(record: try CloudKitSync.makeRecord(minimalPayload(todayTokens: 1)))
+        let ledgerModify = UsageCloudKit.makeModifyOperation(save: [], delete: [])
+        for configuration in [payloadSave.configuration!, ledgerModify.configuration!, UsageCloudKit.operationConfiguration()] {
+            #expect(configuration.qualityOfService == .userInitiated)
+            #expect(configuration.timeoutIntervalForRequest == UsageCloudKit.requestTimeout)
+            #expect(configuration.timeoutIntervalForResource == UsageCloudKit.resourceTimeout)
+        }
+        #expect(UsageCloudKit.resourceTimeout <= 300, "a stuck upload must fail within a few refreshes")
+        #expect(ledgerModify.savePolicy == .allKeys)
+    }
+
     // MARK: - ProviderMetadata & Filtered Limits
 
     @Test func providerMetadataAllKnownHasUniqueIDs() {

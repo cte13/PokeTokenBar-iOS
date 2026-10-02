@@ -563,6 +563,16 @@ read_when:
   `testManualModeStaysManualWhileTheDisplaySleeps`. **부류 스윕**: 같은 `screensDidSleep` 게이트가
   `AppDelegate.setDisplayAwake`(메뉴바 애니메이션)와 `FloatingPetPanel`(펫 호스팅 트리)에도 있으나
   둘 다 순수 표시라 그대로 둔다 — 기기 밖 소비자를 굶기는 건 `UsageStore` 하나뿐이었다.
+  **같은 부류가 OS 쪽에서 재발(2026-10-02).** 우리 코드의 게이트가 아니라 CloudKit 기본 QoS(`.utility`)가
+  범인이었다 — 앱이 "사용 중"이 아니면 `.utility` 요청은 discretionary 라 배터리 전원에서 시스템이 전송을
+  미룬다. 메뉴바 앱은 사실상 항상 "미사용"이라, MacBook 이 배터리로 도는 동안 폰 원장(`UsageLedgerChunk`)과
+  폰 페이로드가 iCloud 에 닿지 않았다(실측: Mac 은 오늘 2천만 토큰을 셌는데 원장 마지막 게시가 14시간 전).
+  게다가 리소스 타임아웃 기본값이 7일이라 미뤄진 업로드가 끝나지도 실패하지도 않아, 한 번에 하나만 올리는
+  `PhoneLedgerPublisher` 가 그 뒤에 조용히 멈췄다(로그 0줄 — 실패가 아니라 미완료). 테스트가 못 거른 이유:
+  CloudKit 은 테스트에서 스텁이고, 9-29 실기기 검증은 전원 연결 상태였다. 고침: 모든 CloudKit 호출이
+  `UsageCloudKit.operationConfiguration()` 하나를 쓴다(`.userInitiated` + 리소스 120초). 회귀 가드:
+  `everyCloudKitOperationIsNonDiscretionaryAndTimeBounded`(QoS·타임아웃 각각 주입해 실패 확인).
+  규칙: 기기 밖 소비자를 위한 네트워크 작업은 OS 의 절전 지연 대상이 아닌지(QoS·discretionary)도 본다.
 
 - **서브 패키지 테스트가 깨진 채 PR이 머지됐다.** `PokeTokenBarSharedTests`의 `PhoneLimitStatus`
   초기화가 위젯 PR(#3)에서 추가된 파라미터를 못 따라갔는데 아무도 서브 패키지의 `swift test`를

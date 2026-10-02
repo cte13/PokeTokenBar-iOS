@@ -14,6 +14,26 @@ public enum UsageCloudKit {
     static let batchSize = 200
     /// Every request here is best effort beside the usage refresh; none may hold it up for long.
     public static let requestTimeout: TimeInterval = 20
+    /// Whole-operation cap. The default is 7 days: an operation the system never sends stays
+    /// pending that long, and the ledger publisher (one upload at a time) stalls behind it.
+    public static let resourceTimeout: TimeInterval = 120
+
+    /// The one configuration every CloudKit call in this app uses (`CloudKitSync` too).
+    ///
+    /// `.userInitiated`, not CloudKit's default `.utility`: at `.utility` a request from an app that
+    /// is not in use is **discretionary** — on battery the system holds it until power conditions
+    /// improve. A menu-bar app is never "in use", so on a MacBook running on battery the ledger
+    /// upload and the phone payload stopped reaching iCloud entirely (2026-10-02: no ledger publish
+    /// for 14 h while the Mac counted 20 M tokens). The consumer is the phone, not this screen,
+    /// so energy-saving deferral must not apply (defect log, "에너지 절약 게이트" entry). The requests
+    /// are a few KB every refresh.
+    public static func operationConfiguration() -> CKOperation.Configuration {
+        let configuration = CKOperation.Configuration()
+        configuration.qualityOfService = .userInitiated
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        return configuration
+    }
 
     // MARK: - Usage ledger (private)
 
@@ -36,7 +56,9 @@ public enum UsageCloudKit {
     public static func fetchLedgerManifest() async throws -> PhoneUsageLedgerManifest? {
         do {
             let record = try await CloudKitSync.container.privateCloudDatabase
-                .record(for: CKRecord.ID(recordName: PhoneUsageLedger.manifestRecordName))
+                .configuredWith(configuration: operationConfiguration()) {
+                    try await $0.record(for: CKRecord.ID(recordName: PhoneUsageLedger.manifestRecordName))
+                }
             guard let json = record["json"] as? String, let data = json.data(using: .utf8) else { return nil }
             return try decoder.decode(PhoneUsageLedgerManifest.self, from: data)
         } catch let error as CKError where error.code == .unknownItem {
@@ -50,7 +72,10 @@ public enum UsageCloudKit {
         let db = CloudKitSync.container.privateCloudDatabase
         for start in stride(from: 0, to: names.count, by: batchSize) {
             let ids = names.dropFirst(start).prefix(batchSize).map { CKRecord.ID(recordName: $0) }
-            for (id, result) in try await db.records(for: Array(ids), desiredKeys: ["payload"]) {
+            let results = try await db.configuredWith(configuration: operationConfiguration()) {
+                try await $0.records(for: Array(ids), desiredKeys: ["payload"])
+            }
+            for (id, result) in results {
                 if case .success(let record) = result, let data = record["payload"] as? Data {
                     out[id.recordName] = data
                 }
@@ -91,7 +116,9 @@ public enum UsageCloudKit {
     public static func fetchCloudSessionKey() async throws -> String? {
         do {
             let record = try await CloudKitSync.container.privateCloudDatabase
-                .record(for: CKRecord.ID(recordName: keyRecordName))
+                .configuredWith(configuration: operationConfiguration()) {
+                    try await $0.record(for: CKRecord.ID(recordName: keyRecordName))
+                }
             return record["privateKey"] as? String
         } catch let error as CKError where error.code == .unknownItem {
             return nil
@@ -122,10 +149,7 @@ public enum UsageCloudKit {
     public static func fetchCloudSessionRecords(channel: String, since: Date) async throws -> [CloudSessionRecord] {
         let query = CKQuery(recordType: CloudSessionCrypto.recordType,
                             predicate: cloudSessionPredicate(channel: channel, since: since))
-        let configuration = CKOperation.Configuration()
-        configuration.timeoutIntervalForRequest = requestTimeout
-        configuration.qualityOfService = .utility
-        return try await CloudKitSync.container.publicCloudDatabase.configuredWith(configuration: configuration) { db in
+        return try await CloudKitSync.container.publicCloudDatabase.configuredWith(configuration: operationConfiguration()) { db in
             var out: [CloudSessionRecord] = []
             var page = try await db.records(matching: query, desiredKeys: ["updatedAt", "payload"])
             while true {
@@ -162,8 +186,7 @@ public enum UsageCloudKit {
     static func makeModifyOperation(save: [CKRecord], delete: [CKRecord.ID]) -> CKModifyRecordsOperation {
         let operation = CKModifyRecordsOperation(recordsToSave: save, recordIDsToDelete: delete)
         operation.savePolicy = .allKeys
-        operation.qualityOfService = .utility
-        operation.configuration.timeoutIntervalForRequest = requestTimeout
+        operation.configuration = operationConfiguration()
         return operation
     }
 

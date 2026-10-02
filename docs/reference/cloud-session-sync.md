@@ -105,6 +105,9 @@ Wire format (reader: `CloudSessionCrypto`):
   Days that left the window are deleted. A failed upload leaves the saved manifest alone, so the next
   refresh retries. **Only Claude opts in** (owner decision 2026-09-28). To add a provider, implement
   `phoneLedgerEntries`; there is no id branch anywhere.
+- Every CloudKit call uses `UsageCloudKit.operationConfiguration()`: `.userInitiated` with a
+  120-second resource cap. At CloudKit's default `.utility`, a menu-bar app's requests are
+  discretionary and are held while a MacBook runs on battery (see the defect log).
 - Every CloudKit call goes through `CloudSyncGate`. The new calls throw `CloudSyncGate.Disabled`
   rather than returning, so a skipped call never records success. The production closures in
   `UsageStore` also require `AppEnv.isBundledApp`, so test stores never touch CloudKit.

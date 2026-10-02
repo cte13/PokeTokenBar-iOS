@@ -53,7 +53,7 @@ public enum CloudKitSync {
     static func makeSaveOperation(record: CKRecord) -> CKModifyRecordsOperation {
         let operation = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: [])
         operation.savePolicy = .allKeys
-        operation.qualityOfService = .utility
+        operation.configuration = UsageCloudKit.operationConfiguration()
         return operation
     }
 
@@ -61,7 +61,9 @@ public enum CloudKitSync {
 
     public static func fetch() async throws -> PhonePayload? {
         do {
-            let record = try await database().record(for: recordID)
+            let record = try await database().configuredWith(configuration: UsageCloudKit.operationConfiguration()) {
+                try await $0.record(for: recordID)
+            }
             guard let json = record[payloadField] as? String,
                   let data = json.data(using: .utf8) else { return nil }
             return try JSONDecoder().decode(PhonePayload.self, from: data)
@@ -73,7 +75,9 @@ public enum CloudKitSync {
     // MARK: - Delete
 
     public static func delete() async throws {
-        try await database().deleteRecord(withID: recordID)
+        _ = try await database().configuredWith(configuration: UsageCloudKit.operationConfiguration()) {
+            try await $0.deleteRecord(withID: recordID)
+        }
     }
 
     // MARK: - Account Check

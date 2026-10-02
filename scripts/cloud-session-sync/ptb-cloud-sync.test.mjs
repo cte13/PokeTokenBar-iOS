@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   trimLine, trimTranscript, chunkEntries, sealPayload, channelFor, recordNameFor,
-  parsePublicKey, relayBody, sessionFiles, pendingRecords, x25519PrivateKey,
+  parsePublicKey, relayBody, sessionFiles, pendingRecords, x25519PrivateKey, run, writeStatus,
 } from './ptb-cloud-sync.mjs';
 
 // Shared with PokeTokenBarShared/Tests/PokeTokenBarSharedTests/CloudSessionCryptoTests.swift — change both together.
@@ -127,4 +127,33 @@ test('sessionFiles + pendingRecords: subagents included, unchanged chunks skippe
   fs.appendFileSync(main, assistant('m2', 'r2', 5) + '\n');
   const next = pendingRecords(DEVICE_PUBLIC, files, uploaded);
   assert.equal(next.length, 1, 'only the grown transcript re-uploads');
+});
+
+test('run reports every outcome in one status line, and logs uploads', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ptb-run-'));
+  const dir = path.join(root, 'state');
+  const transcript = path.join(root, 'proj', 'sess.jsonl');
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, assistant('m1', 'r1', 5) + '\n' + assistant('m2', 'r2', 5) + '\n');
+  const env = { PTB_SYNC_PUBLIC_KEY: DEVICE_PUBLIC.toString('base64'), PTB_RELAY_URL: 'https://relay.example' };
+  const posted = [];
+  const post = (_url, batch) => { posted.push(batch.length); return new Set(); };
+
+  assert.match(await run({ env: {}, input: { transcript_path: transcript }, dir, post }), /^skipped: PTB_SYNC_PUBLIC_KEY or PTB_RELAY_URL/);
+  assert.match(await run({ env, input: {}, dir, post }), /^skipped: no transcript/);
+  assert.deepEqual(posted, [], 'nothing is sent while skipped');
+
+  assert.equal(await run({ env, input: { transcript_path: transcript }, dir, post }), 'uploaded 1 record(s)');
+  assert.match(fs.readFileSync(path.join(dir, 'log'), 'utf8'), /uploaded 1 record\(s\)/);
+  assert.equal(await run({ env, input: { transcript_path: transcript }, dir, post }), 'up to date: nothing new to upload');
+
+  fs.appendFileSync(transcript, assistant('m3', 'r3', 5) + '\n');
+  const reject = (_url, batch) => new Set(batch.map((r) => r.recordName));
+  assert.equal(await run({ env, input: { transcript_path: transcript }, dir, post: reject }),
+    'uploaded 0 record(s), 1 rejected by CloudKit (see log)');
+  assert.equal(await run({ env, input: { transcript_path: transcript }, dir, post }), 'uploaded 1 record(s)',
+    'a rejected chunk is retried on the next run');
+
+  writeStatus('hello', dir);
+  assert.match(fs.readFileSync(path.join(dir, 'status'), 'utf8'), /^\S+Z hello\n$/);
 });

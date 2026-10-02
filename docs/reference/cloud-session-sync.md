@@ -64,8 +64,10 @@ signature over the date and the body hash on every request. So:
 `ptb-cloud-sync.mjs` runs on Stop / SubagentStop / SessionEnd inside the cloud container. It trims
 the transcript and its `subagents/*.jsonl` down to usage lines, dedups per turn, chunks (5000),
 seals each chunk to the device public key, and posts the records to `PTB_RELAY_URL/upload`. Only
-changed chunks upload. It never fails the turn; errors go to
-`~/.cache/poketokenbar-cloud-sync/log`. Tests:
+changed chunks upload. It never fails the turn. Every run overwrites
+`~/.cache/poketokenbar-cloud-sync/status` with one line (uploaded N, up to date, skipped and why,
+or failed), and uploads and errors are appended to `.../log`. Run `cat` on the status file in a
+cloud session first when diagnosing. Tests:
 `node --test scripts/cloud-session-sync/ptb-cloud-sync.test.mjs scripts/cloud-session-sync/relay/worker.test.mjs`.
 
 Wire format (reader: `CloudSessionCrypto`):
@@ -129,9 +131,13 @@ cached count.
 ## CloudKit schema and one-time setup
 
 Record types: public `CloudUsage`; private `UsageLedgerChunk`, `UsageLedgerManifest`,
-`CloudSessionKey` (and the existing `Payload`). In Development, each type is created the first
-time it is written. **Before any production build, deploy the schema to Production**, and set the
-relay's `CLOUDKIT_ENV` (in `wrangler.toml`) to `production`.
+`CloudSessionKey` (and the existing `Payload`). In Development, the private types are created the
+first time the Mac app writes them. **`CloudUsage` is not**: the relay writes with a
+server-to-server key, and CloudKit Web Services does not create record types. Every upload fails
+with `NOT_FOUND could not find record_type with name 'CloudUsage'` until the type is created by
+hand (step 6), as confirmed in the live setup on 2026-09-29. **Before any production build,
+deploy the schema to Production**, and set the relay's `CLOUDKIT_ENV` (in `wrangler.toml`) to
+`production`.
 
 1. CloudKit signing key (PKCS#8, which the relay's WebCrypto needs):
    `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ptb-cloudkit.pem`;
@@ -146,9 +152,16 @@ relay's `CLOUDKIT_ENV` (in `wrangler.toml`) to `production`.
    public). Add an **API credential** for the relay's host with header `Authorization`, prefix `Bearer`,
    and the `RELAY_TOKEN` as its value. Setup script:
    `curl -fsSL https://raw.githubusercontent.com/cte13/PokeTokenBar-iOS/main/scripts/cloud-session-sync/install.sh | bash`
-6. After the first cloud turn: Console → Schema → Indexes → `CloudUsage`: `channel` QUERYABLE,
-   `updatedAt` QUERYABLE + SORTABLE, `recordName` QUERYABLE. Without them the Mac and phone queries
-   fail, and the Mac logs `cloud sessions: pull failed`.
+6. Console → Schema → Record Types → **+** `CloudUsage` with fields `channel` (String),
+   `updatedAt` (Date/Time), `payload` (Bytes). Then add single-field indexes: on the record type
+   page use the **•••** next to each field, or Schema → Indexes → **+** (an index's name is only a
+   label). The indexes are `channel` QUERYABLE, `updatedAt` QUERYABLE + SORTABLE, and `recordName`
+   QUERYABLE. Without the type the Mac logs `Did not find record type: CloudUsage`; without the
+   indexes it logs `Type is not marked indexable: CloudUsage`. A failed upload is retried after the
+   next cloud turn.
+7. Check: send a message in a cloud session, then run `cat ~/.cache/poketokenbar-cloud-sync/status`
+   there; it should say `uploaded N record(s)`. Within a refresh the Mac logs
+   `cloud sessions: 1 record(s), 1 file(s) updated`.
 
 ## Known limits
 

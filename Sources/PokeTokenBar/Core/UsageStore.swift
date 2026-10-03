@@ -285,6 +285,11 @@ final class UsageStore {
     /// Uploads opted-in providers' entries for the iPhone's own count.
     private let publishPhoneLedger: @Sendable ([PhoneLedgerPublisher.Source]) async -> Void
     private var cloudSessionPullInFlight = false
+    /// Shares the claude.ai session key with the iPhone (nil deletes it).
+    private let shareClaudeSessionKey: @Sendable (SharedClaudeSessionKey?) async -> Bool
+    /// What the iPhone last received. `.none` until this launch has shared once, so a key removed
+    /// while the app was closed is still deleted from iCloud.
+    private var sharedClaudeSessionKey: SharedClaudeSessionKey?? = .none
     private let readPromptHistory: @Sendable (URL) -> ClaudeAccountUsageAttribution.Prompts
     /// Rate limits apply per account: one folder's 429 pauses that folder only, never the default
     /// account (which keeps its own backoff) nor the other folders.
@@ -616,12 +621,9 @@ final class UsageStore {
     nonisolated static func forecastDepletion(
         blockTokens: Int, tokensPerMinute: Double, utilization: Double, now: Date
     ) -> Date? {
-        guard utilization >= 5, utilization < 100, blockTokens > 0,
-              tokensPerMinute >= 10_000 else { return nil }
-        let tokensPerPercent = Double(blockTokens) / utilization
-        let minutesLeft = (100 - utilization) * tokensPerPercent / tokensPerMinute
-        guard minutesLeft.isFinite, minutesLeft < 60 * 24 else { return nil }
-        return now.addingTimeInterval(minutesLeft * 60)
+        // Shared with the iPhone's own count (`ClaudeLimitForecast`).
+        ClaudeLimitForecast.depletion(blockTokens: blockTokens, tokensPerMinute: tokensPerMinute,
+                                      utilization: utilization, now: now)
     }
 
     /// 메뉴바 경고 상태 — 임계 초과 또는 리셋 전 한도 도달 예측.
@@ -841,6 +843,9 @@ final class UsageStore {
          publishPhoneLedger: @escaping @Sendable ([PhoneLedgerPublisher.Source]) async -> Void = {
             await UsageStore.installedPhoneLedgerPublish($0)
          },
+         shareClaudeSessionKey: @escaping @Sendable (SharedClaudeSessionKey?) async -> Bool = {
+            await UsageStore.installedShareClaudeSessionKey($0)
+         },
          codexLimitsProvider: any CodexLimitsProviding = CodexRateLimitsProvider(),
          opencodeGoLimitsProvider: any OpenCodeGoLimitsProviding = OpenCodeGoLimitsProvider(),
          antigravityLimitsProvider: any AntigravityLimitsProviding = AntigravityRateLimitsProvider(),
@@ -865,6 +870,7 @@ final class UsageStore {
         self.readPromptHistory = readPromptHistory
         self.pullCloudSessions = pullCloudSessions
         self.publishPhoneLedger = publishPhoneLedger
+        self.shareClaudeSessionKey = shareClaudeSessionKey
         self.sessionKeys = sessionKeys
         self.accountSessionKeys = accountSessionKeys
         self.codexLimitsProvider = codexLimitsProvider
@@ -1198,6 +1204,7 @@ final class UsageStore {
                 AppLog.writeIfChanged("claude-limits", "limits unavailable: \(error)")
             }
         }
+        await shareSessionKeyIfChanged()
         if !isProviderVisible("claude_code") {
             additionalLimits = []
             additionalLimitsPending = false
@@ -1637,6 +1644,30 @@ final class UsageStore {
         }
         let publish = publishPhoneLedger
         Task.detached(priority: .utility) { await publish(sources) }
+    }
+
+    /// After the limits fetch, which may have just resolved (and saved) the organization. Only a
+    /// key with an organization is useful to the phone: it calls one organization's usage, nothing
+    /// else. A failed share is retried at the next refresh.
+    private func shareSessionKeyIfChanged() async {
+        let current = sessionKeys.credential().flatMap { credential in
+            credential.organizationID.map { SharedClaudeSessionKey(key: credential.key, organizationID: $0) }
+        }
+        if case .some(let shared) = sharedClaudeSessionKey, shared == current { return }
+        if await shareClaudeSessionKey(current) { sharedClaudeSessionKey = .some(current) }
+    }
+
+    nonisolated static func installedShareClaudeSessionKey(
+        _ key: SharedClaudeSessionKey?, isBundledApp: Bool = AppEnv.isBundledApp) async -> Bool
+    {
+        guard isBundledApp else { return true }
+        do {
+            try await CloudSyncGate.shareClaudeSessionKey(key)
+            return true
+        } catch {
+            AppLog.writeIfChanged("claude-key-share", "session key: sharing with iPhone failed: \(error)")
+            return false
+        }
     }
 
     nonisolated static func installedCloudSessionPull(isBundledApp: Bool = AppEnv.isBundledApp) async -> Bool {

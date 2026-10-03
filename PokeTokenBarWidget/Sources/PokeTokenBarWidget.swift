@@ -68,7 +68,9 @@ struct WidgetTimelineProvider: TimelineProvider {
         if let macPayload = try? await CloudKitSync.fetch() {
             await sync.update(macPayload: macPayload)
         }
-        await sync.syncLedger()
+        async let ledger = sync.syncLedger()
+        async let claudeLimits = sync.syncClaudeLimits()
+        _ = await (ledger, claudeLimits)
         guard let shown = await sync.display() else { return nil }
         persistPayload(shown)
         return shown

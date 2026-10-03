@@ -40,6 +40,26 @@ private actor UploadGate {
     }
 }
 
+/// Hermetic stand-ins: without them a test store polls real endpoints (status page, Codex, …).
+private struct NoClaudeLimits: ClaudeLimitsProviding {
+    func fetch(allowKeychainPrompt: Bool) async throws -> LimitStatus { throw LimitsError.keychainInteractionNotAllowed }
+}
+private struct NoCodexLimits: CodexLimitsProviding { func fetch() async throws -> CodexRateLimitStatus? { nil } }
+private struct NoOpenCodeGoLimits: OpenCodeGoLimitsProviding { func fetch() async throws -> OpenCodeGoLimitStatus? { nil } }
+private struct NoAntigravityLimits: AntigravityLimitsProviding {
+    func fetch(allowKeychainPrompt: Bool) async throws -> AntigravityRateLimitStatus { throw LimitsError.keychainInteractionNotAllowed }
+}
+private struct NoCursorLimits: CursorLimitsProviding { func fetch() async throws -> CursorRateLimitStatus? { nil } }
+private struct NoStatuses: ProviderStatusProviding { func fetch() async -> [String: ProviderStatus] { [:] } }
+
+private final class MutableSessionKeys: SessionKeyManaging, @unchecked Sendable {
+    nonisolated(unsafe) var stored: SessionKeyCredential?
+    func credential() -> SessionKeyCredential? { stored }
+    func organizations(sessionKey: String) async throws -> [SessionKeyOrganization] { [] }
+    func save(key: String, organizationID: String?) throws { stored = SessionKeyCredential(key: key, organizationID: organizationID) }
+    func clear() { stored = nil }
+}
+
 private final class LedgerProvider: UsageProvider, @unchecked Sendable {
     let id: String
     let displayName: String
@@ -371,8 +391,12 @@ final class UsageStoreCloudSessionTests: XCTestCase {
         let store = UsageStore(
             providers: [LedgerProvider(id: "alpha", ledger: [e]), LedgerProvider(id: "beta", ledger: nil),
                         LedgerProvider(id: "gamma", ledger: [e])],
+            claudeLimitsProvider: NoClaudeLimits(),
             pullCloudSessions: { false },
             publishPhoneLedger: { sources in await published.append(sources.map(\.provider.id)) },
+            codexLimitsProvider: NoCodexLimits(),
+            opencodeGoLimitsProvider: NoOpenCodeGoLimits(), antigravityLimitsProvider: NoAntigravityLimits(),
+            cursorLimitsProvider: NoCursorLimits(), statusProvider: NoStatuses(),
             autoRefresh: false, defaults: defaults)
         store.setProvider("gamma", visible: false)
         await store.refresh()
@@ -385,17 +409,58 @@ final class UsageStoreCloudSessionTests: XCTestCase {
         let pulls = Calls<Int>()
         let store = UsageStore(
             providers: [LedgerProvider(id: "alpha", ledger: nil)],
+            claudeLimitsProvider: NoClaudeLimits(),
             pullCloudSessions: {
                 await pulls.append(1)
                 return await pulls.values.count == 1
             },
             publishPhoneLedger: { _ in },
+            codexLimitsProvider: NoCodexLimits(),
+            opencodeGoLimitsProvider: NoOpenCodeGoLimits(), antigravityLimitsProvider: NoAntigravityLimits(),
+            cursorLimitsProvider: NoCursorLimits(), statusProvider: NoStatuses(),
             autoRefresh: false, defaults: defaults)
         await store.refresh()
         try await waitUntil { await pulls.values.count == 2 }
         try await Task.sleep(nanoseconds: 200_000_000)
         let count = await pulls.values.count
         XCTAssertEqual(count, 2, "an unchanged pull does not loop")
+    }
+
+    /// The phone fetches Claude limits with the Mac's claude.ai session key. It needs the key and
+    /// the organization the Mac resolved; it gets them once per change, a removal deletes them,
+    /// and a failed share is retried at the next refresh.
+    func testSessionKeyIsSharedWhenItChangesAndDeletedWhenRemoved() async throws {
+        let keys = MutableSessionKeys()
+        let shared = Calls<SharedClaudeSessionKey?>()
+        let failNext = Calls<Bool>()
+        let store = UsageStore(
+            providers: [LedgerProvider(id: "alpha", ledger: nil)],
+            claudeLimitsProvider: NoClaudeLimits(),
+            pullCloudSessions: { false }, publishPhoneLedger: { _ in },
+            shareClaudeSessionKey: { key in
+                if await failNext.values.last == true { return false }
+                await shared.append(key)
+                return true
+            },
+            codexLimitsProvider: NoCodexLimits(),
+            opencodeGoLimitsProvider: NoOpenCodeGoLimits(), antigravityLimitsProvider: NoAntigravityLimits(),
+            cursorLimitsProvider: NoCursorLimits(), statusProvider: NoStatuses(),
+            sessionKeys: keys, autoRefresh: false, defaults: defaults)
+
+        await store.refresh()   // no key on this Mac: an earlier share is cleaned up once
+        keys.stored = SessionKeyCredential(key: "sk-ant-sid01-aaa", organizationID: nil)
+        await store.refresh()   // no organization resolved yet: nothing the phone could use
+        keys.stored = SessionKeyCredential(key: "sk-ant-sid01-aaa", organizationID: "org-1")
+        await store.refresh()
+        await store.refresh()   // unchanged: not shared again
+        await failNext.append(true)
+        keys.stored = nil
+        await store.refresh()   // removal fails to reach iCloud…
+        await failNext.append(false)
+        await store.refresh()   // …and is retried
+
+        let values = await shared.values
+        XCTAssertEqual(values, [nil, SharedClaudeSessionKey(key: "sk-ant-sid01-aaa", organizationID: "org-1"), nil])
     }
 
     private func waitUntil(_ condition: @escaping () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {

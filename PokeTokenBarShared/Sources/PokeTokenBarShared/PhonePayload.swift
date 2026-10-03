@@ -92,6 +92,17 @@ public struct PhonePayload: Codable, Sendable, Equatable {
     }
 }
 
+extension PhonePayload {
+    /// The same payload with other limits — the phone's own Claude fetch over the Mac's.
+    public func replacingLimits(_ limits: PhoneLimitStatus?) -> PhonePayload {
+        PhonePayload(todayTokens: todayTokens, todayCost: todayCost, weekTokens: weekTokens,
+                     monthTokens: monthTokens, lastUpdated: lastUpdated, serverVersion: serverVersion,
+                     limits: limits, companion: companion, providers: providers, bag: bag, dex: dex,
+                     spendableTokens: spendableTokens, shop: shop, weekCost: weekCost, monthCost: monthCost,
+                     burn: burn, catchLog: catchLog, dailyTrend: dailyTrend, incidents: incidents)
+    }
+}
+
 // MARK: - Provider Tabs
 
 extension PhonePayload {
@@ -289,12 +300,17 @@ public struct PhoneLimitWindow: Codable, Sendable, Equatable {
     /// Window duration in seconds (e.g. 18000 for 5h, 604800 for 7d). nil when unknown.
     /// Used by the phone to compute the pace marker position.
     public let windowDuration: TimeInterval?
+    /// Claude's per-model weekly windows only: the model's display name. The phone matches its own
+    /// fresh limits to the Mac's windows by this, never by the localized label. nil from older Macs.
+    public let scopeModel: String?
 
-    public init(label: String, utilization: Double, resetsAt: Date?, windowDuration: TimeInterval? = nil) {
+    public init(label: String, utilization: Double, resetsAt: Date?, windowDuration: TimeInterval? = nil,
+                scopeModel: String? = nil) {
         self.label = label
         self.utilization = utilization
         self.resetsAt = resetsAt
         self.windowDuration = windowDuration
+        self.scopeModel = scopeModel
     }
 
     public init(from decoder: Decoder) throws {
@@ -303,6 +319,7 @@ public struct PhoneLimitWindow: Codable, Sendable, Equatable {
         utilization = try c.decode(Double.self, forKey: .utilization)
         resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
         windowDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .windowDuration)
+        scopeModel = try c.decodeIfPresent(String.self, forKey: .scopeModel)
     }
 }
 

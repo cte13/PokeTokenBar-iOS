@@ -18,22 +18,36 @@ public actor PhoneUsageSync {
         public var fetchManifest: @Sendable () async throws -> PhoneUsageLedgerManifest?
         public var fetchChunks: @Sendable ([String]) async throws -> [String: Data]
         public var fetchCloudRecords: @Sendable (_ channel: String, _ since: Date) async throws -> [UsageCloudKit.CloudSessionRecord]
+        public var fetchClaudeSessionKey: @Sendable () async throws -> SharedClaudeSessionKey?
+        public var fetchClaudeUsage: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
         public init(fetchPrivateKey: @escaping @Sendable () async throws -> String?,
                     fetchManifest: @escaping @Sendable () async throws -> PhoneUsageLedgerManifest?,
                     fetchChunks: @escaping @Sendable ([String]) async throws -> [String: Data],
-                    fetchCloudRecords: @escaping @Sendable (String, Date) async throws -> [UsageCloudKit.CloudSessionRecord]) {
+                    fetchCloudRecords: @escaping @Sendable (String, Date) async throws -> [UsageCloudKit.CloudSessionRecord],
+                    fetchClaudeSessionKey: @escaping @Sendable () async throws -> SharedClaudeSessionKey? = { nil },
+                    fetchClaudeUsage: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) = { _ in
+                        throw URLError(.unsupportedURL)
+                    }) {
             self.fetchPrivateKey = fetchPrivateKey
             self.fetchManifest = fetchManifest
             self.fetchChunks = fetchChunks
             self.fetchCloudRecords = fetchCloudRecords
+            self.fetchClaudeSessionKey = fetchClaudeSessionKey
+            self.fetchClaudeUsage = fetchClaudeUsage
         }
 
         public static let cloudKit = Remote(
             fetchPrivateKey: { try await UsageCloudKit.fetchCloudSessionKey() },
             fetchManifest: { try await UsageCloudKit.fetchLedgerManifest() },
             fetchChunks: { try await UsageCloudKit.fetchLedgerChunks(names: $0) },
-            fetchCloudRecords: { try await UsageCloudKit.fetchCloudSessionRecords(channel: $0, since: $1) })
+            fetchCloudRecords: { try await UsageCloudKit.fetchCloudSessionRecords(channel: $0, since: $1) },
+            fetchClaudeSessionKey: { try await UsageCloudKit.fetchClaudeSessionKey() },
+            fetchClaudeUsage: { request in
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                return (data, http)
+            })
     }
 
     /// Same rules as the Mac's mirror (`CloudSessionMirror`): re-read behind the watermark for
@@ -54,6 +68,16 @@ public actor PhoneUsageSync {
         var cloudRecords: [String: Date] = [:]
         /// Last time the ledger was read successfully — the freshness the dashboard shows.
         var ledgerSyncedAt: Date?
+        /// The claude.ai session key the Mac shares, and what the phone fetched with it.
+        var claudeKey: SharedClaudeSessionKey?
+        var claudeLimits: LimitStatus?
+        var claudeLimitsFetchedAt: Date?
+        /// Last *attempt* — the poll budget counts requests, not successes (`LimitsPollCadence`).
+        var claudeLimitsAttemptAt: Date?
+        var claudeLimitsBackoffUntil: Date?
+        /// claude.ai answered 401 for this key. Asking again cannot help; a new key from the Mac
+        /// clears it.
+        var claudeKeyRejected = false
     }
 
     private let directory: URL
@@ -164,12 +188,79 @@ public actor PhoneUsageSync {
         }
     }
 
+    // MARK: - Claude limits
+
+    /// Fetches Claude's official limits with the session key the Mac shares — the same single
+    /// request the Mac sends — at most once per `LimitsPollCadence.minimumInterval` across the app
+    /// and the widget. Returns true when fresh limits were stored.
+    ///
+    /// The phone never rediscovers organizations or repairs a key: on 401 it stops until the Mac
+    /// shares a new key; on 403 (lost access, or a Cloudflare challenge — indistinguishable here)
+    /// and 429 it backs off. Either way the Mac's last limits keep showing.
+    @discardableResult
+    public func syncClaudeLimits(now: Date = Date()) async -> Bool {
+        let fetchedKey: SharedClaudeSessionKey??
+        do { fetchedKey = .some(try await remote.fetchClaudeSessionKey()) } catch { fetchedKey = .none }
+        reload()
+        if case .some(let key) = fetchedKey, key != state.claudeKey {
+            state.claudeKey = key
+            state.claudeKeyRejected = false
+            state.claudeLimitsBackoffUntil = nil
+            state.claudeLimitsAttemptAt = nil
+            if key == nil {
+                state.claudeLimits = nil
+                state.claudeLimitsFetchedAt = nil
+            }
+            save()
+        }
+        guard let key = state.claudeKey, !state.claudeKeyRejected,
+              state.claudeLimitsBackoffUntil.map({ now >= $0 }) ?? true,
+              LimitsPollCadence.shouldFetch(lastAttemptAt: state.claudeLimitsAttemptAt, now: now) else { return false }
+        state.claudeLimitsAttemptAt = now
+        save()
+
+        let request = ClaudeWebUsage.request(ClaudeWebUsage.usageURL(organizationID: key.organizationID),
+                                             sessionKey: key.key)
+        guard let (data, response) = try? await remote.fetchClaudeUsage(request) else { return false }
+        reload()
+        guard state.claudeKey == key else { return false }   // the key changed while we were asking
+        var stored = false
+        switch response.statusCode {
+        case 200:
+            if let limits = try? JSONDecoder().decode(LimitStatus.self, from: data) {
+                state.claudeLimits = limits
+                state.claudeLimitsFetchedAt = now
+                stored = true
+            }
+        case 401:
+            state.claudeKeyRejected = true
+        case 403, 429:
+            let fallback: TimeInterval = response.statusCode == 403 ? 1800 : 600
+            state.claudeLimitsBackoffUntil = now.addingTimeInterval(ClaudeWebUsage.retryAfterSeconds(response) ?? fallback)
+        default:
+            break
+        }
+        save()
+        return stored
+    }
+
     // MARK: - Display
 
     /// The payload the dashboard and widget show. nil only when there is neither a Mac payload nor
     /// a ledger to count from.
     public func display(now: Date = Date()) -> PhonePayload? {
         reload()
+        return withClaudeLimits(usage(now: now))
+    }
+
+    /// The phone's own Claude limits replace the Mac's when they are newer than the Mac payload.
+    private func withClaudeLimits(_ payload: PhonePayload?) -> PhonePayload? {
+        guard let payload, let limits = state.claudeLimits, let fetchedAt = state.claudeLimitsFetchedAt,
+              fetchedAt > (state.macPayload?.lastUpdated ?? .distantPast) else { return payload }
+        return payload.replacingLimits(PhoneClaudeLimits.overlay(payload.limits, fresh: limits))
+    }
+
+    private func usage(now: Date) -> PhonePayload? {
         guard let manifest = state.manifest else { return state.macPayload }
         let fmt = UsageAggregation.localDayFormatter()
         var entries: [String: [UsageEntry]] = [:]

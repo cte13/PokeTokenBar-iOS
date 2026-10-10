@@ -17,6 +17,7 @@ enum LocalUsageReader {
 
     /// 활성 블록(번 레이트)과 enrichment 스캔 하한이 공유하는 5시간 롤링 윈도우 길이.
     static let blockWindow: TimeInterval = UsageAggregation.blockWindow
+    static let recentUseWindow: TimeInterval = UsageAggregation.recentUseWindow
     /// Fork replay는 수 ms 간격으로 기록된다. 이보다 긴 첫 공백부터는 실제 child turn으로 본다.
     private static let forkReplayMaximumGap: TimeInterval = 1
 
@@ -1659,6 +1660,94 @@ enum LocalUsageReader {
         return Entry(id: id, date: date, localDay: fmt.string(from: date), model: model,
                      input: total, output: 0, cacheWrite: 0, cacheRead: 0, explicitCost: cost,
                      costIsEstimate: true, costUnavailable: true)
+    }
+
+    // MARK: Kimi Code
+
+    /// Standalone CLI data root (`$KIMI_CODE_HOME`, default `~/.kimi-code`) — Kimi Code docs,
+    /// `docs/en/configuration/data-locations.md`.
+    static let defaultKimiCodeHomePath = ".kimi-code"
+    /// The Kimi desktop app embeds the same runtime with its own data root (#386).
+    static let kimiDesktopHomePath =
+        "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home"
+
+    static var kimiSessionRoots: [URL] {
+        computeKimiSessionRoots()
+    }
+
+    /// `<home>/sessions` of the CLI root, the desktop runtime root, and `$KIMI_CODE_HOME`.
+    static func computeKimiSessionRoots(
+        homeValue: String? = UsageEnvironment.value("KIMI_CODE_HOME"),
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [URL] {
+        var roots = [
+            home.appendingPathComponent(defaultKimiCodeHomePath).appendingPathComponent("sessions"),
+            home.appendingPathComponent(kimiDesktopHomePath).appendingPathComponent("sessions"),
+        ]
+        if let homeValue, !homeValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            roots.append(URL(fileURLWithPath: NSString(string: homeValue).expandingTildeInPath)
+                .appendingPathComponent("sessions"))
+        }
+        return normalizedRoots(roots)
+    }
+
+    /// Usage lives only in `sessions/<workDirKey>/<sessionId>/agents/<agent>/wire.jsonl`. Every agent
+    /// (main and each subagent) records its own LLM requests, so all wire files count.
+    static func isKimiUsageFile(_ url: URL) -> Bool {
+        url.lastPathComponent == "wire.jsonl"
+    }
+
+    /// Parses a Kimi Code `wire.jsonl`. nil = unreadable (not cached, retried next refresh) — same
+    /// contract as `parsePiFile`.
+    ///
+    /// Only `type:"usage.record"` lines carry usage. Upstream (`MoonshotAI/kimi-code`,
+    /// `agent-core-v2/src/session/usage/usageAgentModel.ts`) writes one record per LLM request with
+    /// that request's `TokenUsage`; `usageScope` is `"turn"` inside a turn and `"session"` for requests
+    /// outside one (e.g. compaction). Both are per-request deltas — upstream's own `byModel` total
+    /// sums them — so both count. Unknown future scopes are skipped rather than guessed.
+    static func parseKimiWireFile(_ url: URL, fmt: DateFormatter) -> [Entry]? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        var out: [Entry] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            // Most lines are messages and request traces → filter by string before JSON parsing.
+            guard line.contains("\"usage.record\"") else { continue }
+            autoreleasepool {
+                if let e = parseKimiLine(String(line), fmt: fmt) { out.append(e) }
+            }
+        }
+        return out
+    }
+
+    static func kimiEntries(modifiedSince: Date, roots: [URL] = kimiSessionRoots) -> [Entry] {
+        let fmt = localDayFormatter()
+        var all: [Entry] = []
+        for root in normalizedRoots(roots) {
+            for file in jsonlFiles(in: root, modifiedSince: modifiedSince) where isKimiUsageFile(file) {
+                all.append(contentsOf: parseKimiWireFile(file, fmt: fmt) ?? [])
+            }
+        }
+        return dedupKeepMax(all)
+    }
+
+    private static func parseKimiLine(_ line: String, fmt: DateFormatter) -> Entry? {
+        guard let data = line.data(using: .utf8),
+              let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (record["type"] as? String) == "usage.record",
+              let usage = record["usage"] as? [String: Any],
+              let millis = doubleOrNil(record["time"]), millis.isFinite, millis > 0 else { return nil }
+        let scope = record["usageScope"] as? String
+        guard scope == nil || scope == "turn" || scope == "session" else { return nil }
+        let input = intOrNil(usage["inputOther"]) ?? 0
+        let output = intOrNil(usage["output"]) ?? 0
+        let cacheRead = intOrNil(usage["inputCacheRead"]) ?? 0
+        let cacheWrite = intOrNil(usage["inputCacheCreation"]) ?? 0
+        let model = (record["model"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "kimi-code"
+        let date = Date(timeIntervalSince1970: millis / 1000)
+        // Records carry no id. `/fork` makes an independent copy of a session, so a path-based id
+        // would count the copied history twice; the record's own content identifies it instead.
+        let id = "kimi|\(Int64(millis))|\(model)|\(scope ?? "-")|\(input)|\(output)|\(cacheRead)|\(cacheWrite)"
+        return Entry(id: id, date: date, localDay: fmt.string(from: date), model: model,
+                     input: input, output: output, cacheWrite: cacheWrite, cacheRead: cacheRead)
     }
 
     private static func codexModel(_ line: Data) -> String? {

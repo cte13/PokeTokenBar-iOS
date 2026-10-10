@@ -288,6 +288,62 @@ final class CredentialSwitchCacheTests: XCTestCase {
         XCTAssertEqual(KeychainReader.queryCount, 0)
     }
 
+    /// Without a token file the credential comes from Keychain on a manual refresh. Once the
+    /// access token expires (~1h), the automatic poll already holds the refresh token in memory —
+    /// refreshing with it needs no Keychain, so the poll must keep the limits fresh instead of
+    /// throwing `keychainInteractionNotAllowed` until the next manual click.
+    func testAutoPollRefreshesAnExpiredKeychainCredentialWithoutKeychain() async throws {
+        let savedGate = KeychainAccessGate.isDisabled
+        KeychainAccessGate.isDisabled = false
+        defer { KeychainAccessGate.isDisabled = savedGate }
+
+        let refreshes = RefreshCounter()
+        let keychainJSON = """
+        {"token": {"access_token": "ya29.keychain", "refresh_token": "1//keychain-refresh",
+                   "expiry": "2020-01-01T00:00:00Z"}}
+        """
+        KeychainReader.copyMatchingForTesting = { _, result in
+            result = Data(keychainJSON.utf8) as CFData
+            return errSecSuccess
+        }
+
+        let cache = AntigravityTokenCache(
+            tokenFileURLs: [tempDir.appendingPathComponent("absent")],
+            tokenRefresher: { refreshToken, _ in
+                refreshes.increment()
+                XCTAssertEqual(refreshToken, "1//keychain-refresh")
+                let issued = refreshes.count
+                // The first grant is already inside the 60 s expiry margin, so the next poll needs another.
+                return .success(AntigravityOAuthCredential(
+                    accessToken: "ya29.refreshed-\(issued)", refreshToken: refreshToken,
+                    expiresAt: Date().addingTimeInterval(issued == 1 ? 30 : 3600)))
+            },
+            clientSecretSource: { ["GOCSPX-test"] })
+        let manual = try await cache.accessToken(allowKeychainPrompt: true, bypassCache: true)
+        XCTAssertEqual(manual, "ya29.refreshed-1")
+
+        KeychainReader.resetQueryCountForTesting()
+        let auto = try await cache.accessToken(allowKeychainPrompt: false)
+        XCTAssertEqual(auto, "ya29.refreshed-2")
+        XCTAssertEqual(refreshes.count, 2)
+        XCTAssertEqual(KeychainReader.queryCount, 0, "the automatic poll must still never open Keychain")
+
+        let again = try await cache.accessToken(allowKeychainPrompt: false)
+        XCTAssertEqual(again, "ya29.refreshed-2", "a fresh refreshed token is reused without another grant")
+        XCTAssertEqual(refreshes.count, 2)
+    }
+
+    /// With no refresh token there is nothing to refresh silently: stay on the old contract.
+    func testAutoPollWithoutCachedRefreshTokenStillRequiresKeychain() async throws {
+        let cache = AntigravityTokenCache(tokenFileURLs: [tempDir.appendingPathComponent("absent")])
+        do {
+            _ = try await cache.accessToken(allowKeychainPrompt: false)
+            XCTFail("expected keychainInteractionNotAllowed")
+        } catch LimitsError.keychainInteractionNotAllowed {
+        }
+        XCTAssertEqual(KeychainReader.queryCount, 0)
+    }
+
     func testExpiredFileRejectedRefreshDoesNotReachKeychain() async throws {
         let file = tempDir.appendingPathComponent("jetski-standalone-oauth-token")
         try writeAntigravityNestedToken(

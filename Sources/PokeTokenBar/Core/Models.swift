@@ -290,18 +290,6 @@ public struct AntigravityQuotaGroup: Decodable, Sendable {
         self.buckets = Self.sortBuckets(buckets)
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        displayName = try container.decode(String.self, forKey: .displayName)
-        description = try container.decodeIfPresent(String.self, forKey: .description)
-        let rawBuckets = try container.decodeIfPresent([AntigravityQuotaBucket].self, forKey: .buckets) ?? []
-        buckets = Self.sortBuckets(rawBuckets)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case displayName, description, buckets
-    }
-
     public static func sortBuckets(_ buckets: [AntigravityQuotaBucket]) -> [AntigravityQuotaBucket] {
         buckets.sorted { a, b in
             if a.is5HourWindow && !b.is5HourWindow { return true }
@@ -309,6 +297,26 @@ public struct AntigravityQuotaGroup: Decodable, Sendable {
             if a.isWeeklyWindow && !b.isWeeklyWindow { return true }
             if !a.isWeeklyWindow && b.isWeeklyWindow { return false }
             return a.bucketId < b.bucketId
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case displayName, description, buckets }
+
+    /// Upstream `remaining` is a protobuf oneof and `remainingFraction` is sometimes omitted.
+    /// Such a bucket is unknown, not exhausted: drop it instead of failing the whole response
+    /// (which froze every Antigravity bar at its previous value).
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        buckets = Self.sortBuckets((try container.decodeIfPresent([LossyBucket].self, forKey: .buckets) ?? [])
+            .compactMap(\.bucket))
+    }
+
+    private struct LossyBucket: Decodable {
+        let bucket: AntigravityQuotaBucket?
+        init(from decoder: Decoder) throws {
+            bucket = try? AntigravityQuotaBucket(from: decoder)
         }
     }
 }
@@ -466,6 +474,8 @@ struct ProviderSnapshot: Sendable, Identifiable {
     var fetchedAt: Date
     /// Mirrors `UsageProvider.reportsCost`. Default keeps existing call sites unchanged.
     var reportsCost: Bool = true
+    /// Mirrors `ProviderEnrichment.lastUsage`.
+    var lastUsage: Date? = nil
 
     var id: String { providerID }
     var todayTotalTokens: Int { today?.totalTokens ?? 0 }

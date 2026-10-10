@@ -77,7 +77,7 @@ public struct ModelRate: Equatable, Sendable {
 }
 
 public enum ModelPricing {
-    /// Standard API prices, checked 2026-09-11: https://developers.openai.com/api/docs/pricing
+    /// Standard API prices: https://developers.openai.com/api/docs/pricing
     /// Historical GPT rates: https://developers.openai.com/api/docs/models/<model-id>
     /// The table is a current-price estimate, not a historical invoice ledger.
     public static let table: [String: ModelRate] = [
@@ -89,6 +89,8 @@ public enum ModelPricing {
         // Opus 5.5, checked 2026-09-25: cheaper than Opus 5, cache read cut to $0.20/MTok (0.05× input).
         "claude-opus-5-5":            .perMillion(4, 20, 5, 0.2),
         "claude-sonnet-5":            .perMillion(2, 10, 2.5, 0.2),
+        // Sonnet 5.5, checked 2026-09-29: 5m cache write $2.50 and cache read $0.20 / MTok.
+        "claude-sonnet-5-5":          .perMillion(2, 10, 2.5, 0.2),
         "claude-opus-4-20250514":     .perMillion(15, 75, 18.75, 1.5),
         "claude-sonnet-4-20250514":   .perMillion(3, 15, 3.75, 0.3),
         "claude-sonnet-4-5-20250929": .perMillion(3, 15, 3.75, 0.3),
@@ -100,6 +102,10 @@ public enum ModelPricing {
         // Fable 5.1: same base rates as Fable 5, cache read cut to $0.25/MTok (0.025× input).
         "claude-fable-5-1":           .perMillion(10, 50, 12.5, 0.25),
         "gpt-6-astra":                .perMillion(10, 50, 12.5, 1),
+        // GPT-6 Sol variants and Luna rates checked 2026-09-30 against the official API pricing page above.
+        "gpt-6-sol":                  .perMillion(2, 10, 2.5, 0.2),
+        "gpt-6.1-sol":                .perMillion(2, 10, 2.5, 0.1),
+        "gpt-6-luna":                 .perMillion(0.1, 0.5, 0.125, 0.01),
         "gpt-5.6-sol":                .perMillion(4, 20, 5, 0.4),
         "gpt-5.6-terra":              .perMillion(2, 12, 2.5, 0.2),
         "gpt-5.6-luna":               .perMillion(0.2, 1.2, 0.25, 0.02),
@@ -161,7 +167,8 @@ public enum ModelPricing {
         // Zero in this column means no supported separate write rate, not free write tokens.
         guard cacheWrite == 0 || r.cacheWrite > 0 else { return nil }
         let prompt = Double(input) + Double(cacheRead) + Double(cacheWrite)
-        let longContext = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        let longContext = ["gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna",
+                           "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                            "gpt-5.5", "gpt-5.4"].contains(key) && prompt > 272_000
             || key == "gemini-2.5-pro" && prompt > 200_000
         let inputMultiplier = longContext ? 2.0 : 1.0
@@ -434,6 +441,9 @@ public enum UsageAggregation {
 
     /// 활성 블록(번 레이트)과 enrichment 스캔 하한이 공유하는 5시간 롤링 윈도우 길이.
     public static let blockWindow: TimeInterval = 5 * 3600
+    /// A provider used within this window keeps its tab on idle days — the weekly quota window: if that
+    /// bar's remaining amount means anything, the tool was used inside it (#336).
+    public static let recentUseWindow: TimeInterval = 7 * 86_400
 
     /// 같은 `(message.id, requestId)` 가 스트리밍/재개로 여러 번 로깅될 때 cacheRead/input 은 고정이나
     /// output 은 증가하므로, **id 별 total 이 가장 큰(=완성된) 항목**을 남긴다(전역 dedup).
@@ -607,7 +617,8 @@ public enum UsageAggregation {
     /// (OpenCode/Hermes 경로엔 이미 `now-7일` 하한이 있었으나 Claude/Codex/Gemini 경로엔 없어
     /// 드리프트했다 — 네 프로바이더가 이 단일 소스를 공유하게 통일.)
     public static func enrichmentScanStart(now: Date) -> Date {
-        min(startOfMonth(now), startOfWeek(now), now.addingTimeInterval(-blockWindow))
+        min(startOfMonth(now), startOfWeek(now), now.addingTimeInterval(-blockWindow),
+            now.addingTimeInterval(-recentUseWindow))
     }
 
     public static func monthKey(_ date: Date) -> String {
@@ -670,15 +681,20 @@ public struct ProviderEnrichment: Sendable {
     /// `nil` means this provider cannot produce a series; aggregation uses available providers.
     public var monthDaily: [DailyUsage]?
     public var periodsOK = false
+    /// Newest entry with tokens. Unlike week/month totals it does not reset at a calendar boundary,
+    /// so it keeps the tab (and its official limits) of a provider used recently but not today (#336).
+    public var lastUsage: Date?
 
     public init(activeBlock: BlockUsage? = nil, blocksOK: Bool = false, weekTotal: PeriodUsage? = nil,
-                monthTotal: PeriodUsage? = nil, monthDaily: [DailyUsage]? = nil, periodsOK: Bool = false) {
+                monthTotal: PeriodUsage? = nil, monthDaily: [DailyUsage]? = nil, periodsOK: Bool = false,
+                lastUsage: Date? = nil) {
         self.activeBlock = activeBlock
         self.blocksOK = blocksOK
         self.weekTotal = weekTotal
         self.monthTotal = monthTotal
         self.monthDaily = monthDaily
         self.periodsOK = periodsOK
+        self.lastUsage = lastUsage
     }
 }
 
@@ -713,6 +729,8 @@ extension ProviderEnrichment {
         result.monthTotal = month
         result.monthDaily = series
         result.periodsOK = true
+        // Zero-token `<synthetic>` records are not use: an installed-only provider stays hidden (#56).
+        result.lastUsage = entries.lazy.filter { $0.total > 0 }.map(\.date).max()
         return result
     }
 }

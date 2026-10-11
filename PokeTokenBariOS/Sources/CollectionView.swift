@@ -771,13 +771,7 @@ struct PokemonDetailView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 5) {
-                ForEach(details.types, id: \.self) { type in
-                    Text(type.uppercased())
-                        .font(.system(size: 9, weight: .bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.16), in: Capsule())
-                }
+                ForEach(details.types, id: \.self) { TypeBadge(type: $0) }
             }
 
             HStack(spacing: 16) {

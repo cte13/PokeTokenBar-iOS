@@ -1,4 +1,5 @@
 import SwiftUI
+import PokeTokenBarShared
 
 /// The 18 main-series types, keyed by PokeAPI's canonical lowercase English name.
 enum PokemonType: String, CaseIterable {
@@ -7,29 +8,9 @@ enum PokemonType: String, CaseIterable {
 
     init?(apiName: String) { self.init(rawValue: apiName.lowercased()) }
 
-    /// Classic type-chart colors.
-    var hex: UInt32 {
-        switch self {
-        case .normal: 0xAAAA99
-        case .fire: 0xFF4422
-        case .water: 0x3399FF
-        case .electric: 0xFFCC33
-        case .grass: 0x77CC55
-        case .ice: 0x66CCFF
-        case .fighting: 0xBB5544
-        case .poison: 0xAA5599
-        case .ground: 0xDDBB55
-        case .flying: 0x8899FF
-        case .psychic: 0xFF5599
-        case .bug: 0xAABB22
-        case .rock: 0xBBAA66
-        case .ghost: 0x6666BB
-        case .dragon: 0x7766EE
-        case .dark: 0x775544
-        case .steel: 0xAAAABB
-        case .fairy: 0xEE99EE
-        }
-    }
+    /// Classic type-chart colors — the shared table, which the iPhone's type chips also read, so the
+    /// two apps cannot drift. Every case has a row (`PokemonTypeColorTests` pins it).
+    var hex: UInt32 { PokemonTypeColor.table[rawValue] ?? 0x888888 }
 
     var color: Color {
         Color(.sRGB, red: Double((hex >> 16) & 0xFF) / 255,

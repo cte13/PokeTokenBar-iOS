@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 @testable import PokeTokenBar
+import PokeTokenBarShared
 
 final class PokemonTypeColorTests: XCTestCase {
     private func hex(_ color: Color) -> UInt32? {
@@ -29,6 +30,15 @@ final class PokemonTypeColorTests: XCTestCase {
     func testLookupIsCaseInsensitive() {
         XCTAssertEqual(hex(color("Electric")), 0xFFCC33)
         XCTAssertEqual(hex(color("GRASS")), 0x77CC55)
+    }
+
+    /// The Mac enum and the shared table are the same 18 names — a type added to one without the
+    /// other would silently render the fallback color.
+    func testEveryCaseHasARowInTheSharedTable() {
+        XCTAssertEqual(Set(PokemonType.allCases.map(\.rawValue)), Set(PokemonTypeColor.table.keys))
+        for type in PokemonType.allCases {
+            XCTAssertEqual(type.hex, PokemonTypeColor.table[type.rawValue], type.rawValue)
+        }
     }
 
     func testUnknownTypesFallBackToGray() {

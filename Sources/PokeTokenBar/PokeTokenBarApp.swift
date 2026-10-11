@@ -526,7 +526,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                                   monthDaily: snapshot.monthDaily?.map {
                                       PhoneDailyTrend(date: $0.date, totalTokens: $0.totalTokens,
                                                       totalCost: $0.totalCost, isToday: $0.date == todayKey)
-                                  })
+                                  },
+                                  lastUsage: snapshot.lastUsage)
         }
     }
 

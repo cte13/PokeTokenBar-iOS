@@ -477,6 +477,10 @@ public struct PhoneProviderSnapshot: Codable, Sendable, Equatable {
     public let monthCost: Double?
     public let tokensPerMinute: Double?
     public let monthDaily: [PhoneDailyTrend]?
+    /// Newest entry with tokens. Week and month totals reset at calendar boundaries, so this is
+    /// what keeps a provider used last Friday on screen on Monday (`hasDisplayableUsage`).
+    /// nil from Macs that predate the field.
+    public let lastUsage: Date?
 
     public init(id: String, displayName: String, todayTokens: Int, todayCost: Double,
                 inputTokens: Int = 0, outputTokens: Int = 0,
@@ -484,13 +488,15 @@ public struct PhoneProviderSnapshot: Codable, Sendable, Equatable {
                 reportsCost: Bool = true,
                 weekTokens: Int? = nil, weekCost: Double? = nil,
                 monthTokens: Int? = nil, monthCost: Double? = nil,
-                tokensPerMinute: Double? = nil, monthDaily: [PhoneDailyTrend]? = nil) {
+                tokensPerMinute: Double? = nil, monthDaily: [PhoneDailyTrend]? = nil,
+                lastUsage: Date? = nil) {
         self.weekTokens = weekTokens
         self.weekCost = weekCost
         self.monthTokens = monthTokens
         self.monthCost = monthCost
         self.tokensPerMinute = tokensPerMinute
         self.monthDaily = monthDaily
+        self.lastUsage = lastUsage
         self.id = id
         self.displayName = displayName
         self.todayTokens = todayTokens
@@ -500,6 +506,19 @@ public struct PhoneProviderSnapshot: Codable, Sendable, Equatable {
         self.cacheWriteTokens = cacheWriteTokens
         self.cacheReadTokens = cacheReadTokens
         self.reportsCost = reportsCost
+    }
+
+    /// The Mac's tab rule (`ProviderSnapshot.hasDisplayableUsage`, upstream #377/#402): any usage
+    /// today, this week or this month, a live 5-hour block, or use within the weekly quota window.
+    /// A provider is shown while its official limits can still mean something, not only on days
+    /// it was used. Callers pass period-gated numbers; `lastUsage` is an absolute date and is not.
+    public func hasDisplayableUsage(now: Date) -> Bool {
+        todayTokens > 0
+            || (tokensPerMinute ?? 0) > 0
+            || (weekTokens ?? 0) > 0
+            || (monthTokens ?? 0) > 0
+            || monthDaily?.contains(where: { $0.totalTokens > 0 }) == true
+            || lastUsage.map { now.timeIntervalSince($0) <= UsageAggregation.recentUseWindow } == true
     }
 }
 

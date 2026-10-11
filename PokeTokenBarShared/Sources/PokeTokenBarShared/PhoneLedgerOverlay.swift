@@ -45,15 +45,17 @@ public enum PhoneLedgerOverlay {
                 monthDaily: enrichment.monthDaily?.map {
                     PhoneDailyTrend(date: $0.date, totalTokens: $0.totalTokens, totalCost: $0.totalCost,
                                     isToday: $0.date == todayKey)
-                })
-            // Same rule as the Mac's snapshot list: a tab for usage today, or a carrier tab while a
-            // 5-hour block from late last night is still active.
-            if today != nil || (enrichment.activeBlock?.totalTokens ?? 0) > 0 {
+                },
+                lastUsage: enrichment.lastUsage)
+            // The Mac's tab rule lives in one place (`hasDisplayableUsage`) so the two devices
+            // cannot drift again: this used to require usage today or a live block, while the Mac
+            // had moved on to keeping idle days and the 7-day quota window (upstream #377/#402).
+            if counted[provider.id]!.hasDisplayableUsage(now: now) {
                 countedVisible.insert(provider.id)
             }
         }
 
-        // Every provider contributes to the totals; only ones with something current get a tab.
+        // Every provider contributes to the totals; only ones with something displayable get a tab.
         var all: [(snapshot: PhoneProviderSnapshot, visible: Bool)] = []
         for mac in macPayload?.providers ?? [] {
             if let replacement = counted.removeValue(forKey: mac.id) {
@@ -70,8 +72,10 @@ public enum PhoneLedgerOverlay {
                 weekTokens: sameWeek ? mac.weekTokens : 0, weekCost: sameWeek ? mac.weekCost : 0,
                 monthTokens: sameMonth ? mac.monthTokens : 0, monthCost: sameMonth ? mac.monthCost : 0,
                 tokensPerMinute: burnFresh ? mac.tokensPerMinute : nil,
-                monthDaily: sameMonth ? mac.monthDaily : nil)
-            all.append((kept, kept.todayTokens > 0 || (kept.tokensPerMinute ?? 0) > 0))
+                monthDaily: sameMonth ? mac.monthDaily : nil,
+                // An absolute date: still true after the Mac's week or month has rolled over.
+                lastUsage: mac.lastUsage)
+            all.append((kept, kept.hasDisplayableUsage(now: now)))
         }
         for provider in manifest.providers {
             guard let snapshot = counted[provider.id] else { continue }

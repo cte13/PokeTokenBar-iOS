@@ -658,6 +658,26 @@ read_when:
   `everyCloudKitOperationIsNonDiscretionaryAndTimeBounded`(QoS·타임아웃 각각 주입해 실패 확인).
   규칙: 기기 밖 소비자를 위한 네트워크 작업은 OS 의 절전 지연 대상이 아닌지(QoS·discretionary)도 본다.
 
+- **폰이 Mac 의 규칙을 "복사"하면 업스트림 동기화 때 조용히 갈라진다 — 규칙은 한 곳에 두고 양쪽이 호출한다.**
+  `PhoneLedgerOverlay` 는 프로바이더 탭 노출 규칙을 "Same rule as the Mac's snapshot list" 라는 주석과 함께
+  *다시 써* 두었다(오늘 사용 또는 활성 5h 블록). 업스트림 #377·#402 가 Mac 쪽 규칙을 "이번 주·이번 달 사용,
+  또는 7일 쿼타 윈도우 안의 마지막 사용" 으로 바꿨는데(`ProviderSnapshot.hasDisplayableUsage`), 동기화 PR(#80)
+  은 Mac 파일만 합쳤고 폰 복사본은 그대로 남았다 — 월요일 아침 Mac 은 Codex 탭과 한도를 보여주는데 폰은
+  탭을 지웠다(2026-10-11 발견). 테스트가 못 거른 이유: 폰 오버레이 테스트는 "오늘 0 이면 숨김" 을 **정답으로
+  고정**하고 있었고(`macAsleepSinceYesterday…` 의 "codex has nothing current, so no tab"), Mac 테스트는 Mac
+  규칙만 본다 — 두 규칙이 같다는 단언은 어디에도 없었다. 동기화 PR 리뷰도 "Mac 의 어떤 규칙이 폰에
+  복사돼 있나" 를 묻지 않았다. 고침: 규칙을 `PhoneProviderSnapshot.hasDisplayableUsage(now:)` 하나로 두고
+  오버레이의 두 분기(재집계·Mac 유지)가 모두 그것을 호출한다. 날짜형 `lastUsage` 를 페이로드에 더해
+  Mac 의 주·월이 넘어간 뒤에도 판정이 가능하게 했다(옵셔널 — 구 Mac 페이로드는 nil 로 디코드). 회귀
+  가드: `aRecountedProviderIdleTodayKeepsItsTabWhileThisMonthHasUsage` · `…SurvivesAMonthRollover`(6일 전은
+  유지, 11일 전은 숨김 — 경계 양쪽) · `aMacOnlyProviderKeepsItsTabFromLastUsageAfterTheMacPeriodRolledOver`.
+  **부류 스윕**: 공유 패키지·iOS·위젯에서 "same rule as the Mac" 류 주석을 전수 확인했다 —
+  `PhoneUsageSync`(미러 재읽기)·`PhoneClaudeLimits`(utilization 유무)·`SpriteCache`(Gen-V GIF 범위)·
+  `TokenFormatter`(반올림 경계, 같은 동기화에서 함께 갈라져 있었고 이 PR 에서 Mac 과 맞췄다). 규칙:
+  **업스트림 동기화 PR 은 Mac 변경 파일마다 "폰·위젯·공유 패키지에 이 규칙의 복사본이 있나" 를 grep 한다**
+  (`PokeTokenBarShared/`·`PokeTokenBariOS/`·`PokeTokenBarWidget/` 에서 같은 상수·같은 조건식·"Mac" 을 언급하는
+  주석). 복사본이 있으면 동기화 PR 에서 함께 고치거나, 공유 패키지의 한 함수로 끌어올린다.
+
 - **서브 패키지 테스트가 깨진 채 PR이 머지됐다.** `PokeTokenBarSharedTests`의 `PhoneLimitStatus`
   초기화가 위젯 PR(#3)에서 추가된 파라미터를 못 따라갔는데 아무도 서브 패키지의 `swift test`를
   돌리지 않아 컴파일 조차 안 되는 상태로 지나갔다. 루트 패키지 게이트만 돌리면 잡히지 않는다 —

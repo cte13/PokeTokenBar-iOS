@@ -485,11 +485,14 @@ final class PhoneProviderSnapshotBuilderTests: XCTestCase {
             monthTotal: PeriodUsage(period: "m", totalTokens: 1000, totalCost: 3),
             monthDaily: [DailyUsage(date: today, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0,
                                     cacheReadTokens: 0, totalTokens: 10, totalCost: 1.5)],
-            fetchedAt: Date())
+            fetchedAt: Date(),
+            lastUsage: Date(timeIntervalSince1970: 1_700_000_000))
         let out = AppDelegate.phoneProviderSnapshots([snapshot], todayKey: today)
         XCTAssertEqual(out.first?.weekTokens, 100)
         XCTAssertEqual(out.first?.monthCost, 3)
         XCTAssertEqual(out.first?.tokensPerMinute, 7)
         XCTAssertEqual(out.first?.monthDaily, [PhoneDailyTrend(date: today, totalTokens: 10, totalCost: 1.5, isToday: true)])
+        // The phone applies the Mac's tab rule itself (`hasDisplayableUsage`), so it needs this date.
+        XCTAssertEqual(out.first?.lastUsage, Date(timeIntervalSince1970: 1_700_000_000))
     }
 }

@@ -21,11 +21,13 @@ private func manifest(_ providers: [PhoneUsageLedgerManifest.Provider] = [claude
     PhoneUsageLedgerManifest(updatedAt: now, providers: providers, records: [])
 }
 
-private func macSnapshot(_ id: String, today: Int, week: Int, month: Int, tpm: Double? = nil) -> PhoneProviderSnapshot {
+private func macSnapshot(_ id: String, today: Int, week: Int, month: Int, tpm: Double? = nil,
+                         lastUsage: Date? = nil) -> PhoneProviderSnapshot {
     PhoneProviderSnapshot(id: id, displayName: id, todayTokens: today, todayCost: 1,
                           weekTokens: week, weekCost: 2, monthTokens: month, monthCost: 3,
                           tokensPerMinute: tpm,
-                          monthDaily: [PhoneDailyTrend(date: "2026-09-01", totalTokens: month - today, totalCost: 2)])
+                          monthDaily: [PhoneDailyTrend(date: "2026-09-01", totalTokens: month - today, totalCost: 2)],
+                          lastUsage: lastUsage)
 }
 
 private func macPayload(at date: Date, providers: [PhoneProviderSnapshot]) -> PhonePayload {
@@ -73,7 +75,7 @@ struct PhoneUsageLedgerCodecTests {
 
 struct PhoneLedgerOverlayTests {
     /// The goal: Mac asleep since yesterday, cloud turns today. Claude is recounted from entries;
-    /// the Mac-only provider keeps its week/month but shows nothing for today.
+    /// the Mac-only provider keeps its week/month (and so its tab, as on the Mac) but shows zero today.
     @Test func macAsleepSinceYesterdayCountsLedgerAndZeroesOtherProvidersToday() {
         let mac = macPayload(at: local(2026, 9, 15, 22), providers: [
             macSnapshot("claude_code", today: 999, week: 999, month: 999),
@@ -82,7 +84,8 @@ struct PhoneLedgerOverlayTests {
         let entries = ["claude_code": [entry("y", local(2026, 9, 15, 20)), entry("t", local(2026, 9, 16, 11))]]
         let out = PhoneLedgerOverlay.apply(macPayload: mac, manifest: manifest(), entries: entries, countedAt: now, now: now)
 
-        #expect(out.providers.map(\.id) == ["claude_code"], "codex has nothing current, so no tab")
+        #expect(out.providers.map(\.id) == ["claude_code", "codex"])
+        #expect(out.providers[1].todayTokens == 0, "yesterday's Mac total is not today's")
         #expect(out.todayTokens == 1000)
         #expect(out.weekTokens == 2000 + 500)
         #expect(out.monthTokens == 2000 + 5000)
@@ -150,6 +153,60 @@ struct PhoneLedgerOverlayTests {
         #expect(out.providers.map(\.id) == ["claude_code"])
         #expect(out.todayTokens == 0)
         #expect((out.burn?.tokensPerMinute ?? 0) > 0)
+    }
+
+    /// The Mac keeps a tab for a provider with history this month even on a day it was not used
+    /// (upstream #377). The phone used to drop it the moment today was zero and no block was live.
+    @Test func aRecountedProviderIdleTodayKeepsItsTabWhileThisMonthHasUsage() {
+        let out = PhoneLedgerOverlay.apply(macPayload: nil, manifest: manifest(),
+                                           entries: ["claude_code": [entry("w", local(2026, 9, 14, 10))]],
+                                           countedAt: now, now: now)
+        #expect(out.providers.map(\.id) == ["claude_code"])
+        #expect(out.providers[0].todayTokens == 0)
+        #expect(out.providers[0].monthTokens == 1000)
+    }
+
+    /// Week and month reset at calendar boundaries; the newest entry does not. A provider used
+    /// last Friday is still shown on the 1st of the next month (upstream #402, the 7-day quota window),
+    /// while one idle for longer is not.
+    @Test func aRecountedProviderUsedInsideTheQuotaWindowSurvivesAMonthRollover() {
+        let firstOfMonth = local(2026, 10, 1, 9)
+        let recent = ["claude_code": [entry("fri", local(2026, 9, 25, 15))]]       // 6 days back
+        let stale = ["claude_code": [entry("old", local(2026, 9, 20, 15))]]        // 11 days back
+        let kept = PhoneLedgerOverlay.apply(macPayload: nil, manifest: manifest(), entries: recent,
+                                            countedAt: firstOfMonth, now: firstOfMonth)
+        let dropped = PhoneLedgerOverlay.apply(macPayload: nil, manifest: manifest(), entries: stale,
+                                               countedAt: firstOfMonth, now: firstOfMonth)
+        #expect(kept.providers.map(\.id) == ["claude_code"])
+        #expect(kept.providers[0].monthTokens == 0, "a tab, not a number — month is a fresh zero")
+        #expect(dropped.providers.isEmpty)
+    }
+
+    /// A provider the phone does not recount follows the same rule from the Mac's numbers. Period
+    /// values are zeroed when the Mac's period is over, but `lastUsage` is an absolute date.
+    @Test func aMacOnlyProviderKeepsItsTabFromLastUsageAfterTheMacPeriodRolledOver() {
+        let firstOfMonth = local(2026, 10, 1, 9)
+        let mac = macPayload(at: local(2026, 9, 30, 23), providers: [
+            macSnapshot("codex", today: 0, week: 500, month: 5000, lastUsage: local(2026, 9, 28, 12)),
+            macSnapshot("gemini", today: 0, week: 0, month: 5000, lastUsage: local(2026, 9, 10, 12)),
+            macSnapshot("cursor", today: 0, week: 0, month: 5000),   // older Mac: no lastUsage field
+        ])
+        let out = PhoneLedgerOverlay.apply(macPayload: mac, manifest: manifest([]), entries: [:],
+                                           countedAt: firstOfMonth, now: firstOfMonth)
+        #expect(out.providers.map(\.id) == ["codex"])
+        #expect(out.providers[0].monthTokens == 0)
+        #expect(out.monthTokens == 0, "hidden providers still contribute nothing stale to the totals")
+    }
+
+    /// Payloads from Macs that predate the field decode with `lastUsage == nil`.
+    @Test func providerSnapshotWithoutLastUsageDecodes() throws {
+        let json = """
+        {"id":"codex","displayName":"Codex","todayTokens":1,"todayCost":0,"inputTokens":0,"outputTokens":0,
+         "cacheWriteTokens":0,"cacheReadTokens":0,"reportsCost":true}
+        """.data(using: .utf8)!
+        let snapshot = try JSONDecoder().decode(PhoneProviderSnapshot.self, from: json)
+        #expect(snapshot.lastUsage == nil)
+        #expect(snapshot.hasDisplayableUsage(now: now))
     }
 
     @Test func aPastDepletionForecastIsDropped() {

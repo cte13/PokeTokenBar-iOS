@@ -20,6 +20,7 @@ public struct ProviderMetadata: Sendable, Equatable, Identifiable {
         ProviderMetadata(id: "grok", displayName: "Grok CLI"),
         ProviderMetadata(id: "hermes", displayName: "Hermes Agent"),
         ProviderMetadata(id: "kiro", displayName: "Kiro"),
+        ProviderMetadata(id: "kimi_code", displayName: "Kimi Code"),
         ProviderMetadata(id: "pi", displayName: "Pi"),
         ProviderMetadata(id: "omp", displayName: "Oh My Prompt"),
     ]

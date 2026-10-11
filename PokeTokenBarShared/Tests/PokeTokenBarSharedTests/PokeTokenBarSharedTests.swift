@@ -13,11 +13,40 @@ struct PhonePayloadTests {
         #expect(TokenFormatter.compact(1_240_000_000) == "1.24B")
     }
 
+    /// Same cases as the Mac's `testCompactPromotesUnitAtRoundingBoundary`: the unit follows the
+    /// rounded display value, so a value that would read "1000.0K" is promoted to "1M".
+    @Test func compactPromotesUnitAtRoundingBoundary() {
+        let cases: [(Int, String)] = [
+            (999_949, "999.9K"), (999_950, "1M"),
+            (999_999, "1M"), (1_000_000, "1M"),
+            (999_949_999, "999.9M"), (999_950_000, "1B"),
+            (999_999_999, "1B"), (1_000_000_000, "1B"),
+            (1_240_000_000, "1.24B"),
+        ]
+        for (value, expected) in cases {
+            #expect(TokenFormatter.compact(value) == expected, "value: \(value)")
+            #expect(TokenFormatter.compact(-value) == "-" + expected, "value: \(-value)")
+        }
+    }
+
     @Test func costFormatting() {
         #expect(TokenFormatter.cost(9.50) == "$9.50")
         #expect(TokenFormatter.costCompact(9.5) == "$9.5")
         #expect(TokenFormatter.costCompact(311) == "$311")
         #expect(TokenFormatter.costCompact(12_400) == "$12.4K")
+    }
+
+    /// The band is decided from the rounded string, not the raw value (Mac `testRoundingBoundaries`).
+    @Test func costCompactAndPercentPickPrecisionFromTheRoundedValue() {
+        #expect(TokenFormatter.costCompact(99.96) == "$100")
+        #expect(TokenFormatter.costCompact(99.94) == "$99.9")
+        #expect(TokenFormatter.costCompact(9_999.6) == "$10.0K")
+        #expect(TokenFormatter.costCompact(9_999.4) == "$9999")
+        #expect(TokenFormatter.costCompact(100) == "$100")
+        #expect(TokenFormatter.percent(79.96) == "80%")
+        #expect(TokenFormatter.percent(99.97) == "100%")
+        #expect(TokenFormatter.percent(0.04) == "0%")
+        #expect(TokenFormatter.percent(79.94) == "79.9%")
     }
 
     @Test func percentFormatting() {

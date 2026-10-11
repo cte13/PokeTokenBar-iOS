@@ -58,7 +58,7 @@ struct DashboardView: View {
                 UsageCard(payload: payload)
 
                 if let trend = payload.dailyTrend, trend.contains(where: { $0.totalTokens > 0 }) {
-                    DailyTrendCard(days: trend)
+                    DailyTrendCard(payload: payload)
                 }
 
                 // Totals above stay cross-provider; details, limits and history are scoped to the
@@ -784,57 +784,97 @@ struct SetupView: View {
 
 // MARK: - Daily Trend Card
 
+/// This month's usage, one column per calendar day, stacked by provider when more than one was used
+/// this month — the phone counterpart of the Mac's `MonthDailyTrend`. The math (`PhoneDailyTrendLayout`)
+/// is shared and tested; this view only draws it. Tapping a day puts its numbers in the readout;
+/// otherwise the readout shows today.
 struct DailyTrendCard: View {
-    let days: [PhoneDailyTrend]
+    let payload: PhonePayload
+    @State private var selectedDate: String?
 
-    private var peak: Int { days.map(\.totalTokens).max() ?? 0 }
-    private var todayDate: String {
-        days.first(where: \.isToday)?.date ?? days.last?.date ?? ""
-    }
+    private static let track: CGFloat = 26
+    private static let baseline: CGFloat = 1.5
+    private static let spacing: CGFloat = 1.5
+
+    /// Same palette as the Mac (`MonthDailyTrend.providerPalette`), indexed by the payload's provider
+    /// order so a provider keeps its color on both devices.
+    static let providerPalette: [Color] = [
+        Color(red: 0.85, green: 0.47, blue: 0.34),
+        Color(red: 0.36, green: 0.62, blue: 0.95),
+        Color(red: 0.45, green: 0.78, blue: 0.52),
+        Color(red: 0.78, green: 0.55, blue: 0.92),
+        Color(red: 0.95, green: 0.76, blue: 0.32),
+        Color(red: 0.35, green: 0.78, blue: 0.80),
+        Color(red: 0.93, green: 0.51, blue: 0.68),
+        Color(red: 0.62, green: 0.64, blue: 0.70),
+        Color(red: 0.88, green: 0.80, blue: 0.60),
+        Color(red: 0.70, green: 0.82, blue: 0.38),
+        Color(red: 0.60, green: 0.42, blue: 0.30),
+        Color(red: 0.30, green: 0.60, blue: 0.55),
+        Color(red: 0.80, green: 0.35, blue: 0.40),
+        Color(red: 0.40, green: 0.48, blue: 0.80),
+    ]
+
+    /// The phone's own calendar day. The Mac's series may end yesterday (Mac asleep); today's column
+    /// then shows zero, which is the truth on this device.
+    private var today: String { UsageAggregation.localDayFormatter().string(from: Date()) }
 
     var body: some View {
+        let today = today
+        let columns = PhoneDailyTrendLayout.monthColumns(series: payload.dailyTrend ?? [], today: today)
+        let peak = columns.map(\.tokens).max() ?? 0
+        let stack = PhoneDailyTrendLayout.ordered(PhoneDailyTrendLayout.providerSeries(from: payload))
+        let stacked = PhoneDailyTrendLayout.isStacked(stack)
+        let colors = PhoneDailyTrendLayout.colorIndices(for: stack.map(\.id), registry: payload.providers.map(\.id),
+                                                        paletteCount: Self.providerPalette.count)
+        let selected = columns.first { $0.date == selectedDate } ?? columns.first { $0.date == today }
+        let readout = selected.flatMap { PhoneDailyTrendLayout.readout(for: $0, stack: stack) }
+
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Daily Trend")
                     .font(.headline)
                 Spacer()
-                if peak > 0 {
+                if PhoneDailyTrendLayout.showsPeak(columns) {
                     Text("Peak \(TokenFormatter.compact(peak))")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
 
-            // Bars
-            HStack(alignment: .bottom, spacing: 1.5) {
-                ForEach(days) { day in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(barColor(day))
+            // Bars — one slot per day of the month, so widths and labels hold still all month.
+            HStack(alignment: .bottom, spacing: Self.spacing) {
+                ForEach(columns) { column in
+                    bar(column, peak: peak, today: today, stack: stack, stacked: stacked, colors: colors)
                         .frame(maxWidth: .infinity)
-                        .frame(height: barHeight(day.totalTokens))
-                        .accessibilityLabel(Text("\(day.date): \(TokenFormatter.compact(day.totalTokens)) tokens"))
+                        .frame(height: Self.track, alignment: .bottom)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard !column.isFuture else { return }
+                            selectedDate = selectedDate == column.date ? nil : column.date
+                        }
+                        .accessibilityLabel(Text("\(column.date): \(TokenFormatter.compact(column.tokens)) tokens"))
                 }
             }
-            .frame(height: 26, alignment: .bottom)
 
-            // Weekend ticks
-            HStack(spacing: 1.5) {
-                ForEach(days) { day in
+            // Weekend ticks — past days and today only.
+            HStack(spacing: Self.spacing) {
+                ForEach(columns) { column in
                     RoundedRectangle(cornerRadius: 0.5)
-                        .fill(isWeekend(day.date) ? Color.secondary.opacity(0.3) : .clear)
+                        .fill(PhoneDailyTrendLayout.showsWeekendTick(column) ? Color.secondary.opacity(0.3) : .clear)
                         .frame(maxWidth: .infinity)
                         .frame(height: 1.5)
                 }
             }
 
             // Axis labels
-            HStack(spacing: 1.5) {
-                ForEach(days) { day in
+            HStack(spacing: Self.spacing) {
+                ForEach(columns) { column in
                     Group {
-                        if let label = axisLabel(for: day.date) {
+                        if let label = PhoneDailyTrendLayout.axisLabel(for: column.date, today: today) {
                             Text(label)
                                 .font(.system(size: 9).monospacedDigit())
-                                .foregroundStyle(day.date == todayDate ? Color.accentColor : Color.secondary)
+                                .foregroundStyle(column.date == today ? Color.accentColor : Color.secondary)
                                 .fixedSize(horizontal: true, vertical: false)
                         } else {
                             Color.clear.frame(height: 1)
@@ -843,6 +883,13 @@ struct DailyTrendCard: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+
+            if let readout {
+                readoutRows(readout, isToday: readout.date == today, colors: colors)
+            }
+            if stacked {
+                legend(stack, colors: colors)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -850,34 +897,85 @@ struct DailyTrendCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    private func barColor(_ day: PhoneDailyTrend) -> Color {
-        if day.isToday { return .accentColor }
-        if day.totalTokens == 0 { return .secondary.opacity(0.18) }
+    @ViewBuilder
+    private func bar(_ column: PhoneDailyTrendLayout.Column, peak: Int, today: String,
+                     stack: [PhoneDailyTrendLayout.ProviderSeries], stacked: Bool, colors: [String: Int]) -> some View {
+        let height = CGFloat(PhoneDailyTrendLayout.barHeight(tokens: column.tokens, peak: peak,
+                                                            track: Self.track, baseline: Self.baseline))
+        if column.isFuture {
+            Color.clear.frame(height: Self.baseline)
+        } else if stacked, column.tokens > 0 {
+            // Segments come bottom → top; a VStack lays out top → bottom.
+            let segments = PhoneDailyTrendLayout.segments(on: column.date, stack: stack, barHeight: height)
+            VStack(spacing: 0) {
+                ForEach(Array(segments.reversed().enumerated()), id: \.offset) { _, segment in
+                    Rectangle()
+                        .fill(color(for: segment.providerID, colors: colors))
+                        .frame(height: CGFloat(segment.height))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 1))
+            .opacity(selectedDate == nil || selectedDate == column.date ? 1 : 0.45)
+        } else {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(singleColor(column, today: today))
+                .frame(height: height)
+                .opacity(selectedDate == nil || selectedDate == column.date ? 1 : 0.45)
+        }
+    }
+
+    private func singleColor(_ column: PhoneDailyTrendLayout.Column, today: String) -> Color {
+        if column.date == today { return .accentColor }
+        if column.tokens == 0 { return .secondary.opacity(0.18) }
         return .secondary.opacity(0.45)
     }
 
-    private func barHeight(_ tokens: Int) -> CGFloat {
-        guard peak > 0, tokens > 0 else { return 1.5 }
-        let ratio = min(1, Double(tokens) / Double(peak))
-        return max(1.5, CGFloat(ratio) * 26)
+    private func color(for providerID: String, colors: [String: Int]) -> Color {
+        Self.providerPalette[(colors[providerID] ?? 0) % Self.providerPalette.count]
     }
 
-    private func isWeekend(_ dateString: String) -> Bool {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        guard let date = f.date(from: dateString) else { return false }
-        return Calendar.current.isDateInWeekend(date)
+    /// The selected (or today's) day: date, total and cost; then each provider's share when stacked.
+    private func readoutRows(_ readout: PhoneDailyTrendLayout.Readout, isToday: Bool, colors: [String: Int]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(isToday ? String(localized: "Today") : PhoneDailyTrendLayout.dayStamp(readout.date))
+                    .foregroundStyle(isToday ? Color.accentColor : Color.primary)
+                Text(TokenFormatter.compact(readout.tokens))
+                if readout.cost > 0 {
+                    Text(TokenFormatter.costCompact(readout.cost))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption.weight(.medium).monospacedDigit())
+            ForEach(readout.rows, id: \.id) { row in
+                HStack(spacing: 6) {
+                    Circle().fill(color(for: row.id, colors: colors)).frame(width: 6, height: 6)
+                    Text(row.name)
+                    Text(TokenFormatter.compact(row.tokens))
+                    if let cost = row.cost, cost > 0 {
+                        Text(TokenFormatter.costCompact(cost)).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+        }
     }
 
-    private func axisLabel(for date: String) -> String? {
-        guard let dayOfMonth = Int(date.suffix(2)) else { return nil }
-        if date == todayDate { return "\(dayOfMonth)" }
-        let isRegular = dayOfMonth == 1 || dayOfMonth % 7 == 0
-        guard isRegular else { return nil }
-        if let todayOfMonth = Int(todayDate.suffix(2)),
-           abs(dayOfMonth - todayOfMonth) < 3 { return nil }
-        return "\(dayOfMonth)"
+    private func legend(_ stack: [PhoneDailyTrendLayout.ProviderSeries], colors: [String: Int]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(stack, id: \.id) { provider in
+                    HStack(spacing: 4) {
+                        Circle().fill(color(for: provider.id, colors: colors)).frame(width: 6, height: 6)
+                        Text(provider.name)
+                    }
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 }
 

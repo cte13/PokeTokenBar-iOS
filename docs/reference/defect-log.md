@@ -793,6 +793,12 @@ read_when:
   안에 보관한다. 객체 동일성 검증과 동시 요청은 유지하며, Sendable 우회 선언을 추가하지 않는다.
   회귀 가드: `SpriteImageCacheTests` 의 두 동시 로드 테스트와 `macos-15` CI의 테스트 컴파일.
   (CI 실패: 2026-09-10.)
+- **격리 경계를 넘는 제네릭 결과에는 `Sendable` 제약을 명시한다.** `SpriteRetry.load(isolation: #isolation)`
+  가 nonisolated `attempt` 클로저의 `SpriteFetchResult<Value>` 를 받는데, 로컬 Swift 6.3 은 region 분석으로
+  통과시켰고 CI Swift 6.1.2 는 "non-sendable result type cannot be sent" 로 거부했다(#84, 2026-10-24).
+  **왜 못 걸렀나:** 위 항목과 같은 부류 — 로컬엔 6.1 도구체인이 없어 CI 가 유일한 검증이다. 6.3 이 받아들인
+  격리 추론을 6.1 도 받아들인다고 가정하지 않는다. → 결과 타입을 `SpriteFetchResult<Value: Sendable>: Sendable`,
+  `load<Value: Sendable>` 로 선언해 추론에 기대지 않는다(`Data`·`UIImage` 는 Sendable). 회귀 가드: CI 컴파일.
 - **SwiftUI `View`/`App` 경계는 `@MainActor` 를 명시한다.** Swift 6.3 은 `body` 밖의 `@ViewBuilder` helper·
   동기 클로저를 nonisolated 로 검사해, `@MainActor` `@Observable` store 접근이 수십 개의 오류로 연쇄된다.
   개별 프로퍼티에 `MainActor.assumeIsolated` 를 흩뿌리지 말고 UI 타입 선언 한 곳에 격리를 둔다.

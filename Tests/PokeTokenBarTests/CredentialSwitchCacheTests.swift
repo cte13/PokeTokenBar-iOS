@@ -366,7 +366,104 @@ final class CredentialSwitchCacheTests: XCTestCase {
         XCTAssertEqual(KeychainReader.queryCount, 0)
     }
 
+    /// Upstream v2.5.6 recovery guards, ported onto the injected `tokenRefresher`. The fork's
+    /// `refreshGoogleToken` folds timeout, 429 and 5xx into `.transient`, so one outcome covers all three.
+    func testExpiredKeychainCredentialRetriesAfterTransientRefreshWithoutKeychain() async throws {
+        try await assertAntigravityRefreshRecovery(failInitialManualRefresh: false)
+    }
+
+    func testInitialManualKeychainRefreshFailurePreservesCredentialForAutomaticRetry() async throws {
+        try await assertAntigravityRefreshRecovery(failInitialManualRefresh: true)
+    }
+
+    func testNonexpiredManualBypassKeepsValidTokenAfterTransientRefresh() async throws {
+        let savedGate = KeychainAccessGate.isDisabled
+        KeychainAccessGate.isDisabled = false
+        defer { KeychainAccessGate.isDisabled = savedGate }
+        let refreshes = RefreshCounter()
+        let data = Data("""
+        {"token":{"access_token":"ya29.still-valid","refresh_token":"fixture-refresh",
+                  "expiry":"2099-01-01T00:00:00Z"}}
+        """.utf8)
+        KeychainReader.copyMatchingForTesting = { _, result in
+            result = data as CFData
+            return errSecSuccess
+        }
+        let cache = AntigravityTokenCache(
+            tokenFileURLs: [tempDir.appendingPathComponent("absent")],
+            tokenRefresher: { _, _ in
+                refreshes.increment()
+                return .transient
+            },
+            clientSecretSource: { ["GOCSPX-test"] })
+        let manual = try await cache.accessToken(allowKeychainPrompt: true, bypassCache: true)
+        XCTAssertEqual(manual, "ya29.still-valid")
+        XCTAssertEqual(refreshes.count, 1, "manual bypass must still attempt a grant")
+        KeychainReader.resetQueryCountForTesting()
+        let automatic = try await cache.accessToken(allowKeychainPrompt: false)
+        XCTAssertEqual(automatic, manual)
+        XCTAssertEqual(refreshes.count, 1)
+        XCTAssertEqual(KeychainReader.queryCount, 0)
+    }
+
     // MARK: fixtures
+
+    /// The real cache receives a failed grant. It must throw before `fetch` can send the expired
+    /// access token to quota (HTTP 401 would invalidate the only cached refresh token).
+    private func assertAntigravityRefreshRecovery(failInitialManualRefresh: Bool) async throws {
+        let savedGate = KeychainAccessGate.isDisabled
+        KeychainAccessGate.isDisabled = false
+        defer { KeychainAccessGate.isDisabled = savedGate }
+        let refreshes = RefreshCounter()
+        nonisolated(unsafe) var phase = failInitialManualRefresh ? 1 : 0
+        let data = Data("""
+        {"token":{"access_token":"ya29.expired","refresh_token":"fixture-refresh",
+                  "expiry":"2020-01-01T00:00:00Z"}}
+        """.utf8)
+        KeychainReader.copyMatchingForTesting = { _, result in
+            result = data as CFData
+            return errSecSuccess
+        }
+        let cache = AntigravityTokenCache(
+            tokenFileURLs: [tempDir.appendingPathComponent("absent")],
+            tokenRefresher: { refreshToken, _ in
+                refreshes.increment()
+                XCTAssertEqual(refreshToken, "fixture-refresh")
+                if phase == 1 { return .transient }
+                return .success(AntigravityOAuthCredential(
+                    accessToken: "ya29.phase-\(phase)", refreshToken: refreshToken,
+                    expiresAt: Date().addingTimeInterval(phase == 0 ? 30 : 3600)))
+            },
+            clientSecretSource: { ["GOCSPX-test"] })
+        if !failInitialManualRefresh {
+            let primed = try await cache.accessToken(allowKeychainPrompt: true, bypassCache: true)
+            XCTAssertEqual(primed, "ya29.phase-0")
+            KeychainReader.resetQueryCountForTesting()
+            phase = 1
+        }
+        do {
+            _ = try await cache.accessToken(allowKeychainPrompt: failInitialManualRefresh,
+                                            bypassCache: failInitialManualRefresh)
+            // Mirrors fetch's quota401 invalidation if an expired token incorrectly escapes.
+            await cache.invalidate()
+            XCTFail("a temporary refresh failure must not return an expired access token")
+        } catch {
+            if failInitialManualRefresh {
+                XCTAssertEqual(error as? AntigravityTokenRefreshError, .transient)
+            } else {
+                XCTAssertEqual(error as? LimitsError, .keychainInteractionNotAllowed)
+            }
+        }
+        if failInitialManualRefresh { KeychainReader.resetQueryCountForTesting() }
+        phase = 2
+        let recovered = try await cache.accessToken(allowKeychainPrompt: false)
+        XCTAssertEqual(recovered, "ya29.phase-2")
+        XCTAssertEqual(KeychainReader.queryCount, 0, "automatic recovery must not reopen Keychain")
+        let grants = refreshes.count
+        let again = try await cache.accessToken(allowKeychainPrompt: false)
+        XCTAssertEqual(again, recovered)
+        XCTAssertEqual(refreshes.count, grants, "a fresh token is reused without another grant")
+    }
 
     private func writeClaudeCredentials(
         to url: URL, token: String, subscription: String, expiresIn: TimeInterval = 3600

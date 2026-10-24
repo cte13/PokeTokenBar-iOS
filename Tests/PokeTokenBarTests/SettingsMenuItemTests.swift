@@ -69,7 +69,7 @@ final class SettingsMenuItemTests: XCTestCase {
         XCTAssertNil(SettingsMenuItem.find(in: menu))
     }
 
-    /// 없으면 nil — 호출부가 폴백(브리지)으로 갈 수 있게 실패를 숨기지 않는다.
+    /// 없으면 nil — 호출부(`install`)가 새 항목을 넣을 수 있게 실패를 숨기지 않는다.
     func testReturnsNilWhenNoSettingsItemExists() {
         let menu = NSMenu()
         let item = NSMenuItem()
@@ -109,6 +109,59 @@ final class SettingsMenuItemTests: XCTestCase {
         let receiver = NSObject()
         XCTAssertFalse(
             SettingsMenuItem.retarget(in: NSMenu(), to: receiver, action: Selector(("noop:"))),
-            "못 찾았으면 false 여야 폴백이 동작한다")
+            "못 찾았으면 false 여야 install 이 새 항목을 넣는다")
+    }
+
+    /// `_EmptyScene` 은 Settings 항목을 만들지 않는다 — 그때 ⌘, 항목을 앱 메뉴에 새로 넣어야
+    /// ⌘, 가 팝오버의 설정을 연다.
+    func testInstallAddsCommandCommaItemWhenNoneExists() throws {
+        final class Receiver: NSObject {
+            @objc func openIt(_ sender: Any?) {}
+        }
+        let receiver = Receiver()
+        let menu = NSMenu()
+        let container = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About", action: nil, keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit", action: Selector(("terminate:")), keyEquivalent: "q")
+        container.submenu = appMenu
+        menu.addItem(container)
+
+        XCTAssertTrue(SettingsMenuItem.install(
+            in: menu, to: receiver, action: #selector(Receiver.openIt(_:)), title: "Settings…"))
+
+        let item = try XCTUnwrap(SettingsMenuItem.find(in: menu))
+        XCTAssertIdentical(appMenu.items[2], item, "About 와 구분선 다음에 들어간다")
+        XCTAssertIdentical(item.target as AnyObject, receiver)
+        XCTAssertEqual(item.action, #selector(Receiver.openIt(_:)))
+        XCTAssertTrue(item.keyEquivalentModifierMask.contains(.command))
+        XCTAssertEqual(appMenu.items.count, 4)
+    }
+
+    /// 이미 있으면 새로 넣지 않고 돌린다 — 중복 ⌘, 항목이 생기면 안 된다.
+    func testInstallRetargetsExistingItemWithoutDuplicating() throws {
+        final class Receiver: NSObject {
+            @objc func openIt(_ sender: Any?) {}
+        }
+        let receiver = Receiver()
+        let menu = NSMenu()
+        let container = NSMenuItem()
+        let appMenu = NSMenu()
+        let settings = NSMenuItem(
+            title: "Settings…", action: Selector(("showSettingsWindow:")), keyEquivalent: ",")
+        appMenu.addItem(settings)
+        container.submenu = appMenu
+        menu.addItem(container)
+
+        XCTAssertTrue(SettingsMenuItem.install(
+            in: menu, to: receiver, action: #selector(Receiver.openIt(_:)), title: "Settings…"))
+        XCTAssertEqual(appMenu.items.count, 1)
+        XCTAssertIdentical(settings.target as AnyObject, receiver)
+    }
+
+    func testInstallFailsWithoutAnAppMenu() {
+        XCTAssertFalse(SettingsMenuItem.install(
+            in: NSMenu(), to: NSObject(), action: Selector(("noop:")), title: "Settings…"))
     }
 }

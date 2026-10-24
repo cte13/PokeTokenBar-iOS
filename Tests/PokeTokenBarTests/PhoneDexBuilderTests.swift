@@ -79,8 +79,7 @@ final class PhoneDexBuilderTests: XCTestCase {
             isShiny: true,
             nature: .adamant,
             profile: profile,
-            names: [25: ["en": "Pikachu"]],
-            unownForm: nil
+            names: [25: ["en": "Pikachu"]]
         )
 
         let phoneEntry = AppDelegate.phoneDexEntry(entry, companion: companion)
@@ -138,9 +137,29 @@ final class PhoneDexBuilderTests: XCTestCase {
             nature: .timid,
             profile: nil,
             names: [:],
-            unownForm: .f
+            form: PokemonForm("f")
         )
         let phoneEntry = AppDelegate.phoneDexEntry(entry, companion: companion)
         XCTAssertEqual(phoneEntry.unownForm, "f")
+    }
+
+    /// The phone payload only models Unown letters. Since upstream generalized forms (#376), other
+    /// species carry a form too; sending Sky Shaymin's "sky" as an Unown letter would be wrong.
+    func testPhoneDexEntryDoesNotSendOtherSpeciesFormsAsUnownLetters() {
+        let (companion, _) = makeCompanion()
+        let entry = DexEntry(
+            id: "shaymin-1",
+            baseID: 492,
+            finalID: 492,
+            chainOrder: [492],
+            rarity: .legendary,
+            caughtAt: Date(),
+            isShiny: false,
+            nature: .timid,
+            profile: nil,
+            names: [:],
+            form: PokemonForm("sky")
+        )
+        XCTAssertNil(AppDelegate.phoneDexEntry(entry, companion: companion).unownForm)
     }
 }

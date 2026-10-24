@@ -118,6 +118,12 @@ public enum AntigravityRefreshOutcome: Sendable, Equatable {
     case transient
 }
 
+/// A refresh grant failed for a temporary reason (network, 429, 5xx) while the access token was
+/// already expired. Thrown instead of returning the dead token, which would 401 and wipe the cache.
+public enum AntigravityTokenRefreshError: Error, Equatable {
+    case transient
+}
+
 /// 사용자가 설정에서 "연결 해제" 를 눌렀을 때의 결말.
 public enum AntigravityRevokeResult: Sendable, Equatable {
     case revoked
@@ -422,13 +428,23 @@ actor AntigravityTokenCache {
         if !bypassCache && !cred.isExpired {
             return adopt(cred).accessToken
         }
+        // Keep a manually acquired refresh token before a transient grant failure: the next
+        // automatic poll must be able to retry without reading Keychain again.
+        let adopted = adopt(cred)
         // 만료되었거나 bypassCache인 경우 refresh_token이 있다면 갱신 시도
-        if let refreshToken = cred.refreshToken,
-           let token = applyRefresh(await refreshCredential(refreshToken: refreshToken)) {
-            return token
+        if let refreshToken = cred.refreshToken {
+            let outcome = await refreshCredential(refreshToken: refreshToken)
+            if let token = applyRefresh(outcome) { return token }
+            // Sending an expired token after a temporary grant failure leads to quota HTTP 401,
+            // and `fetch` then invalidates our only refresh credential. Throw instead (ported from upstream v2.5.6).
+            if outcome == .transient && cred.isExpired {
+                AppLog.writeIfChanged("antigravity-refresh", "antigravity token refresh failed: \(outcome)")
+                throw AntigravityTokenRefreshError.transient
+            }
         }
-        // 갱신 실패했더라도 기존 accessToken 저장 및 반환 (API에서 401 나면 다시 처리)
-        return adopt(cred).accessToken
+        // A still-valid token survives a failed forced refresh. Rejected grants keep the existing
+        // fallback contract (API HTTP 401 handles revoked credentials).
+        return adopted.accessToken
     }
 
     func invalidate() {

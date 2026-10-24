@@ -12,11 +12,11 @@ struct PokeTokenBarApp: App {
         // 메뉴바는 AppDelegate 의 NSStatusItem 이 담당.
         // MenuBarExtra 라벨은 고빈도 갱신 시 재렌더링 폭주로 CPU/메모리 문제가 있어 사용하지 않는다.
         //
-        // 이 씬은 `App` 이 Scene 을 최소 하나 요구해서 존재한다 — 설정 화면 자체는 팝오버 안에 있다.
-        // 내용이 `EmptyView` 이던 동안 ⌘, 는 **빈 창** 을 띄웠다. 평소엔 메뉴 항목을 우리 액션으로
-        // 돌려(SettingsMenuItem.retarget) 이 씬이 아예 열리지 않지만, 그 셀렉터는 문서화된 API 가
-        // 아니라 못 찾을 수 있다 — 그때 빈 창으로 되돌아가지 않도록 브리지를 폴백으로 둔다.
-        Settings { SettingsSceneBridge() }
+        // No standalone windows: the status item and its popover are owned by AppDelegate.
+        // Settings live inside the popover, so ⌘, is served by our own app-menu item
+        // (SettingsMenuItem.install) rather than a SwiftUI `Settings` scene, which macOS
+        // could also open as an empty window on launch or reopen (#448).
+        _EmptyScene()
     }
 }
 
@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var menuIndex = 0
     private var menuTimer: Timer?
     private var menuLoadGen = 0     // async 로드 경합 방지
+    private var menuLoadTask: Task<Void, Never>?
     private var displayAwake = true     // 디스플레이 켜짐 여부 (꺼지면 메뉴 애니메이션 정지 — 배터리)
     private var powerObserver: NSObjectProtocol?   // 저전력 토글 → 유효 fps 하한 재평가
 
@@ -367,9 +368,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         let dex = companion.dexSpecies.map { sp in
             let isRep = companion.isRepresentative(sp)
-            let unownCount: Int? = (sp.id == UnownForm.speciesID) ? companion.state.collectedUnownForms.count : nil
-            let unownForms: [PhoneUnownForm]? = (sp.id == UnownForm.speciesID) ? companion.unownFormSpecies.compactMap { formSp in
-                guard let form = formSp.unownForm else { return nil }
+            // The phone payload still models Unown letters only; other species' forms aren't sent yet.
+            let unown = PokemonForm.unownSpeciesID
+            let unownCount: Int? = (sp.id == unown) ? companion.state.collectedForms(speciesID: unown).count : nil
+            let unownForms: [PhoneUnownForm]? = (sp.id == unown) ? companion.formSpecies(speciesID: unown).compactMap { formSp in
+                guard let form = formSp.form else { return nil }
                 return PhoneUnownForm(form: form.rawValue, symbol: form.symbol, isShiny: formSp.isShiny,
                                       isRepresentative: companion.isRepresentative(formSp))
             } : nil
@@ -698,7 +701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             caughtAt: entry.caughtAt,
             chainOrder: entry.chainOrder,
             chainNames: names,
-            unownForm: entry.unownForm?.rawValue,
+            unownForm: entry.chainOrder.contains(PokemonForm.unownSpeciesID) ? entry.form?.rawValue : nil,
             profile: profile
         )
     }
@@ -762,12 +765,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// 에선 하한을 powerSaver 로 강제 캡(`effectiveFrameFloor`)한다 — GIF 를 생략(bob)하는 대신
     /// 프레임률만 낮춰, 애니메이션을 유지한 채 절전한다(bob 2회/s ↔ powerSaver ≤2.5회/s 로 근접).
     private func ensureMenuAnimation() {
+        guard displayAwake else { return }
         let subject = companion.representativeSubject
         let id = subject.speciesID
         let shiny = subject.isShiny
-        let unownForm = subject.unownForm
-        let key = id.map { Self.menuSpriteKey(id: $0, shiny: shiny, floor: menuFrameFloor, unownForm: unownForm) }
+        let form = subject.form
+        let key = id.map { Self.menuSpriteKey(id: $0, shiny: shiny, floor: menuFrameFloor, form: form) }
         if key == menuSpriteKey, !menuFrames.isEmpty { return }   // 이미 이 개체로 애니메이션 중
+        menuLoadTask?.cancel()
+        menuLoadTask = nil
         menuSpriteKey = key
         menuLoadGen += 1
         let gen = menuLoadGen
@@ -776,31 +782,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             setMenuFrames(Self.eggFrames())
             return
         }
-        // 정적 스프라이트 bob 을 먼저(없으면 받아와서). GIF 가 받아지면 아래에서 교체.
-        if let cached = SpriteLoader.cachedImage(speciesID: id, shiny: shiny, unownForm: unownForm) {
-            setMenuFrames(Self.bobFrames(from: cached))
-        } else {
-            setMenuFrames(Self.eggFrames())
-            Task { @MainActor [weak self] in
-                guard let self, gen == self.menuLoadGen,
-                      let sprite = await SpriteLoader.image(speciesID: id, shiny: shiny, unownForm: unownForm) else { return }
-                guard gen == self.menuLoadGen else { return }
-                self.setMenuFrames(Self.bobFrames(from: sprite))
-            }
-        }
+        // Seed from the PNG cache immediately; a missing PNG must not delay the first GIF request.
+        let cached = SpriteLoader.cachedImage(speciesID: id, shiny: shiny, form: form)
+        setMenuFrames(cached.map { Self.bobFrames(from: $0) } ?? Self.eggFrames())
 
-        // 풀 GIF 애니메이션. delay 하한 `menuFrameFloor` 로 redraw 통제 — 저전력 모드에선 이 하한이
-        // powerSaver 로 캡되므로(GIF 생략 대신) 실제 애니메이션을 유지한 채 절전한다.
-        Task { @MainActor [weak self] in
+        // One owned task applies its static fallback before retrying GIFs. A late PNG response
+        // can no longer overwrite a successfully loaded animation.
+        menuLoadTask = Task { @MainActor [weak self] in
             guard let self, gen == self.menuLoadGen else { return }
-            // shiny GIF 미제공 종이면 일반 GIF 폴백
-            var data = await SpriteStore.shared.data(speciesID: id, animated: true, shiny: shiny, unownForm: unownForm)
-            if data == nil, shiny {
-                data = await SpriteStore.shared.data(speciesID: id, animated: true, shiny: false, unownForm: unownForm)
-            }
-            guard let data else { return }
-            let raw = GIFDecoder.frames(from: data)
-            guard raw.count > 1, gen == self.menuLoadGen else { return }
+            defer { if gen == self.menuLoadGen { self.menuLoadTask = nil } }
+            let raw = await SpriteLoader.recoveringAnimationFrames(
+                speciesID: id, shiny: shiny, form: form,
+                onUnavailable: {
+                    guard cached == nil, !Task.isCancelled, gen == self.menuLoadGen else { return }
+                    let sprite = await SpriteLoader.image(speciesID: id, shiny: shiny, form: form)
+                    guard !Task.isCancelled, gen == self.menuLoadGen, let sprite else { return }
+                    self.setMenuFrames(Self.bobFrames(from: sprite))
+                })
+            guard !Task.isCancelled, raw.count > 1, gen == self.menuLoadGen else { return }
             // fps 캡 = `menuFrameFloor`. 프레임마다 상태바 재합성(CA 커밋 → 디스플레이 사이클
             // wakeup)이 붙으므로 네이티브 fps 로는 절대 돌리지 않는다(근거는 상수 주석).
             // 솎아낸 **뒤** 22px 로 합성한다 — 버려질 프레임까지 합성하지 않게.
@@ -949,8 +948,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// **하한(fps 설정)이 반드시 들어가야 한다.** 프레임은 하한에 맞춰 솎아낸 결과물이라, 키가
     /// 종·이로치만 담으면 설정을 바꿔도 다음 진화까지 옛 fps 로 계속 돈다(설계 시 확인된 함정).
     /// 순수·테스트용: `testIdentityKeysIncludeTheFrameFloor`.
-    static func menuSpriteKey(id: Int, shiny: Bool, floor: TimeInterval, unownForm: UnownForm? = nil) -> String {
-        let form = UnownForm.resolved(speciesID: id, form: unownForm)
+    static func menuSpriteKey(id: Int, shiny: Bool, floor: TimeInterval, form: PokemonForm? = nil) -> String {
+        let form = PokemonForm.resolved(speciesID: id, form: form)
         return "\(id)-\(shiny)-\(floor)-\(form?.rawValue ?? "")"
     }
 
@@ -1035,17 +1034,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     /// **활성화 시점에 돌려야 한다.** `.accessory` 앱의 메인 메뉴는 앱이 처음 활성화될 때 만들어져,
-    /// `applicationDidFinishLaunching` 이나 그 다음 런루프에는 아직 없다(실측: 그 시점 시도는 실패해
-    /// 폴백 브리지가 대신 받았다 — 빈 창이 잠깐 떴다 닫히는 그 경로다). 활성화마다 부르고,
-    /// 성공하면 그 뒤로는 건너뛴다.
+    /// `applicationDidFinishLaunching` 이나 그 다음 런루프에는 아직 없다. 활성화마다 부르고,
+    /// 성공하면 그 뒤로는 건너뛴다. `_EmptyScene` 은 Settings 항목을 만들지 않으므로 보통은
+    /// 우리 항목을 앱 메뉴에 새로 넣는다 — 시스템이 항목을 만들어 둔 경우엔 그것을 돌린다.
     private func retargetSettingsMenuItem() {
         guard !settingsMenuRetargeted, let menu = NSApp.mainMenu else { return }
-        settingsMenuRetargeted = SettingsMenuItem.retarget(
-            in: menu, to: self, action: #selector(openSettingsFromMenu(_:)))
+        settingsMenuRetargeted = SettingsMenuItem.install(
+            in: menu, to: self, action: #selector(openSettingsFromMenu(_:)),
+            title: companion.l.settings + "…")
         if !settingsMenuRetargeted {
-            // 메뉴는 있는데 항목을 못 찾은 경우 — 셀렉터 이름이 바뀌었을 수 있다.
-            AppLog.writeIfChanged(
-                "settings-menu", "settings menu item not found — ⌘, falls back to the scene bridge")
+            AppLog.writeIfChanged("settings-menu", "settings menu: no app menu to hold ⌘, yet")
         }
     }
 
@@ -1169,6 +1167,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func setDisplayAwake(_ awake: Bool) {
         displayAwake = awake
+        if !awake, menuLoadTask != nil {
+            menuLoadTask?.cancel()
+            menuLoadTask = nil
+            menuLoadGen += 1
+            setMenuFrames([])   // Discard only unfinished fallback frames so wake also reloads an egg.
+        } else if awake {
+            ensureMenuAnimation()
+        }
         syncMenuAnimation()
         floatingPet.setDisplayAwake(awake)   // 슬립 중엔 펫 호스팅 트리 해제(GIF 루프 정지)
     }

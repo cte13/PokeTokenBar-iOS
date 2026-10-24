@@ -413,6 +413,10 @@ public struct PhoneCompanionState: Codable, Sendable, Equatable {
     public let natureText: String?
     /// Evolution line strip: realized path + guaranteed next stages (+ one mystery node on a branch).
     public let lineNodes: [PhoneEvoNode]?
+    /// The current mon's form at its current species (nil for species without forms and old Macs).
+    public let form: PhoneSpriteForm?
+    /// The representative's form, for the widget (nil for species without forms and old Macs).
+    public let representativeForm: PhoneSpriteForm?
 
     public init(name: String, speciesID: Int?, isShiny: Bool, isEgg: Bool,
                 progress: Double, stageText: String, rarity: String?,
@@ -420,7 +424,8 @@ public struct PhoneCompanionState: Codable, Sendable, Equatable {
                 evolutionTokens: Int? = nil, graduationTokens: Int? = nil,
                 representativeSpeciesID: Int? = nil, representativeIsShiny: Bool? = nil,
                 statusText: String? = nil, natureText: String? = nil,
-                lineNodes: [PhoneEvoNode]? = nil) {
+                lineNodes: [PhoneEvoNode]? = nil, form: PhoneSpriteForm? = nil,
+                representativeForm: PhoneSpriteForm? = nil) {
         self.name = name
         self.speciesID = speciesID
         self.isShiny = isShiny
@@ -438,6 +443,16 @@ public struct PhoneCompanionState: Codable, Sendable, Equatable {
         self.statusText = statusText
         self.natureText = natureText
         self.lineNodes = lineNodes
+        self.form = form
+        self.representativeForm = representativeForm
+    }
+
+    /// What the widget mirrors: the pinned representative when set, else the current mon.
+    public var widgetSprite: (id: Int, shiny: Bool, form: PhoneSpriteForm?)? {
+        if let id = representativeSpeciesID {
+            return (id, representativeIsShiny ?? false, representativeForm)
+        }
+        return speciesID.map { ($0, isShiny, form) }
     }
 }
 
@@ -448,11 +463,14 @@ public struct PhoneEvoNode: Codable, Sendable, Equatable {
     /// Pre-localized species name (nil for the mystery node).
     public let name: String?
     public let state: State
+    /// The individual's form at this species (nil for species without forms and old Macs).
+    public let form: PhoneSpriteForm?
 
-    public init(speciesID: Int?, name: String?, state: State) {
+    public init(speciesID: Int?, name: String?, state: State, form: PhoneSpriteForm? = nil) {
         self.speciesID = speciesID
         self.name = name
         self.state = state
+        self.form = form
     }
 }
 
@@ -592,10 +610,14 @@ public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable, Hasha
     public let unownForms: [PhoneUnownForm]?
     /// Extended PokéAPI species metadata pre-localized by the Mac.
     public let details: PhoneSpeciesDetails?
+    /// Every form of the species, default first, owned or not. Nil for species without forms and
+    /// for Macs older than generic forms (those send only the Unown fields above).
+    public let forms: [PhoneDexForm]?
 
     public init(id: Int, name: String, rarity: String, isShiny: Bool, isRaising: Bool,
                 isRepresentative: Bool? = nil, unownFormCount: Int? = nil,
-                unownForms: [PhoneUnownForm]? = nil, details: PhoneSpeciesDetails? = nil) {
+                unownForms: [PhoneUnownForm]? = nil, details: PhoneSpeciesDetails? = nil,
+                forms: [PhoneDexForm]? = nil) {
         self.id = id
         self.name = name
         self.rarity = rarity
@@ -605,6 +627,7 @@ public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable, Hasha
         self.unownFormCount = unownFormCount
         self.unownForms = unownForms
         self.details = details
+        self.forms = forms
     }
 
     public init(from decoder: Decoder) throws {
@@ -618,6 +641,83 @@ public struct PhoneDexSpecies: Codable, Sendable, Equatable, Identifiable, Hasha
         unownFormCount = try c.decodeIfPresent(Int.self, forKey: .unownFormCount)
         unownForms = try c.decodeIfPresent([PhoneUnownForm].self, forKey: .unownForms)
         details = try c.decodeIfPresent(PhoneSpeciesDetails.self, forKey: .details)
+        forms = try c.decodeIfPresent([PhoneDexForm].self, forKey: .forms)
+    }
+
+    /// The forms to show, from `forms` or, for an older Mac, rebuilt from the Unown list.
+    public var displayForms: [PhoneDexForm] {
+        if let forms { return forms }
+        guard id == PhoneSpriteForm.unownSpeciesID, let owned = unownForms else { return [] }
+        return PhoneSpriteForm.unownLetters.compactMap { letter in
+            guard let sprite = PhoneSpriteForm.legacyUnown(letter) else { return nil }
+            let match = owned.first { $0.form == letter }
+            return PhoneDexForm(sprite: sprite, isOwned: match != nil, isShiny: match?.isShiny ?? false,
+                                isRepresentative: match?.isRepresentative ?? false)
+        }
+    }
+}
+
+/// One form of a species in the Collection: its sprite and whether the user owns it.
+public struct PhoneDexForm: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var id: String { sprite.form }
+    public let sprite: PhoneSpriteForm
+    public let isOwned: Bool
+    /// Owned shiny at some point.
+    public let isShiny: Bool
+    public let isRepresentative: Bool
+
+    public init(sprite: PhoneSpriteForm, isOwned: Bool, isShiny: Bool, isRepresentative: Bool) {
+        self.sprite = sprite
+        self.isOwned = isOwned
+        self.isShiny = isShiny
+        self.isRepresentative = isRepresentative
+    }
+}
+
+/// An individual's appearance within a species (Unown's letter, Sky Shaymin, Sandy Wormadam).
+/// The Mac owns the form catalog and resolves the sprite file names, so the phone only renders.
+public struct PhoneSpriteForm: Codable, Sendable, Equatable, Hashable {
+    public static let unownSpeciesID = 201
+    public static let unownLetters = "abcdefghijklmnopqrstuvwxyz".map(String.init) + ["exclamation", "question"]
+
+    /// Form identifier ("sky", "b"), stable across languages.
+    public let form: String
+    /// Static PNG file name without extension: `10006` for a separate PokéAPI variety, else `<id>-<form>`.
+    public let staticAsset: String
+    /// Animated GIF file name without extension (`492-sky`); the default form uses the plain id.
+    public let animatedAsset: String
+    /// Pre-localized form name ("Sky Forme"), or Unown's letter. Nil while the Mac has no name.
+    public let label: String?
+    /// The species' usual look, which keeps the plain sprite names and cache keys.
+    public let isDefault: Bool
+
+    public init(form: String, staticAsset: String, animatedAsset: String, label: String?, isDefault: Bool) {
+        self.form = form
+        self.staticAsset = staticAsset
+        self.animatedAsset = animatedAsset
+        self.label = label
+        self.isDefault = isDefault
+    }
+
+    /// "Shaymin [Sky Forme]" / "Unown [B]": Unown always names its letter, others only a non-default form.
+    public func displayName(_ name: String, speciesID: Int) -> String {
+        guard let label, !label.isEmpty, speciesID == Self.unownSpeciesID || !isDefault else { return name }
+        return "\(name) [\(label)]"
+    }
+
+    /// An Unown letter from a Mac older than generic forms (`unownForm: "b"`).
+    public static func legacyUnown(_ letter: String?) -> PhoneSpriteForm? {
+        guard let letter, !letter.isEmpty else { return nil }
+        let symbol: String
+        switch letter {
+        case "exclamation": symbol = "!"
+        case "question": symbol = "?"
+        default: symbol = letter.uppercased()
+        }
+        let isDefault = letter == "a"
+        let asset = isDefault ? String(unownSpeciesID) : "\(unownSpeciesID)-\(letter)"
+        return PhoneSpriteForm(form: letter, staticAsset: asset, animatedAsset: asset,
+                               label: symbol, isDefault: isDefault)
     }
 }
 
@@ -712,12 +812,14 @@ public struct PhoneDexEntry: Codable, Sendable, Equatable, Identifiable, Hashabl
     public let chainNames: [Int: String]
     public let unownForm: String?
     public let profile: PhoneIndividualProfile?
+    /// The individual's form at each chain species that has forms (nil for old Macs).
+    public let chainForms: [Int: PhoneSpriteForm]?
 
     public init(id: String, baseID: Int, finalID: Int, rarity: String,
                 isShiny: Bool, isRaising: Bool, isReleased: Bool,
                 natureName: String?, caughtAt: Date?, chainOrder: [Int],
                 chainNames: [Int: String], unownForm: String?,
-                profile: PhoneIndividualProfile? = nil) {
+                profile: PhoneIndividualProfile? = nil, chainForms: [Int: PhoneSpriteForm]? = nil) {
         self.id = id
         self.baseID = baseID
         self.finalID = finalID
@@ -731,6 +833,13 @@ public struct PhoneDexEntry: Codable, Sendable, Equatable, Identifiable, Hashabl
         self.chainNames = chainNames
         self.unownForm = unownForm
         self.profile = profile
+        self.chainForms = chainForms
+    }
+
+    /// The form shown at `speciesID`, falling back to an older Mac's Unown letter.
+    public func form(at speciesID: Int) -> PhoneSpriteForm? {
+        if let chainForms { return chainForms[speciesID] }
+        return speciesID == PhoneSpriteForm.unownSpeciesID ? PhoneSpriteForm.legacyUnown(unownForm) : nil
     }
 }
 

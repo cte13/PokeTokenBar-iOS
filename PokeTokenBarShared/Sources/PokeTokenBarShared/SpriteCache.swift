@@ -4,34 +4,23 @@ import Foundation
 public enum PokeSpriteURL {
     private static let base = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"
 
-    public static func species(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
-        let name: String
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            name = "\(id)-\(form)"
-        } else {
-            name = "\(id)"
-        }
-        return URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(name).png")
+    /// Static PNG. A form uses the Mac's resolved file name (`10006` for Sky Shaymin, `412-sandy`).
+    public static func species(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> URL? {
+        URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(form?.staticAsset ?? "\(id)").png")
     }
 
     /// Gen-V animated GIF — only species 1…649 have one (same rule as the Mac's PokemonAssets).
     public static func hasAnimatedSprite(id: Int) -> Bool { (1...649).contains(id) }
 
-    public static func animatedSpecies(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
+    public static func animatedSpecies(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> URL? {
         guard hasAnimatedSprite(id: id) else { return nil }
-        let name: String
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            name = "\(id)-\(form)"
-        } else {
-            name = "\(id)"
-        }
+        let name = form?.animatedAsset ?? "\(id)"
         return URL(string: "\(base)/pokemon/versions/generation-v/black-white/animated/\(shiny ? "shiny/" : "")\(name).gif")
     }
 
-    public static func animatedSpeciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            return "\(id)_\(form)_\(shiny)_anim.gif"
-        }
+    /// Default forms keep the plain keys, so sprites cached before forms existed stay valid.
+    public static func animatedSpeciesKey(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> String {
+        if let form, !form.isDefault { return "\(id)_\(form.form)_\(shiny)_anim.gif" }
         return "\(id)_\(shiny)_anim.gif"
     }
 
@@ -40,13 +29,47 @@ public enum PokeSpriteURL {
     }
 
     /// Stable on-disk file name for a species sprite — the same key the widget has always used.
-    public static func speciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            return "\(id)_\(form)_\(shiny).png"
-        }
+    public static func speciesKey(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> String {
+        if let form, !form.isDefault { return "\(id)_\(form.form)_\(shiny).png" }
         return "\(id)_\(shiny).png"
     }
     public static func itemKey(name: String) -> String { "item_\(name).png" }
+}
+
+/// Outcome of one sprite fetch. Only a temporary failure is worth retrying: a 404 means the
+/// sprite doesn't exist (e.g. no animated GIF for that form) and retrying it would never succeed.
+public enum SpriteFetchResult<Value: Sendable>: Sendable {
+    case loaded(Value)
+    case notFound
+    case failed
+}
+
+/// Retries a sprite fetch after temporary failures (upstream #447): 2 s, doubling to a 30 s cap,
+/// with no attempt limit. The caller owns the await, so cancelling its view task (the view
+/// disappearing or its key changing) also stops the backoff.
+public enum SpriteRetry {
+    public static let initialDelay = Duration.seconds(2)
+    public static let maximumDelay = Duration.seconds(30)
+
+    /// Runs on the caller's actor (`isolation`), so a SwiftUI view task can pass its closure.
+    public static func load<Value: Sendable>(
+        isolation: isolated (any Actor)? = #isolation,
+        waitBeforeRetry: (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        _ attempt: () async -> SpriteFetchResult<Value>
+    ) async -> Value? {
+        var delay = initialDelay
+        while !Task.isCancelled {
+            switch await attempt() {
+            case .loaded(let value): return value
+            case .notFound: return nil
+            case .failed: break
+            }
+            guard !Task.isCancelled else { return nil }
+            do { try await waitBeforeRetry(delay) } catch { return nil }
+            delay = min(delay * 2, maximumDelay)
+        }
+        return nil
+    }
 }
 
 #if canImport(UIKit)
@@ -86,31 +109,53 @@ public final class SpriteCache: @unchecked Sendable {
 
     /// Cached image or a network fetch that populates both layers. nil on any failure.
     public func image(for url: URL?, key: String) async -> UIImage? {
-        if let hit = cachedImage(key: key) { return hit }
-        guard let data = await data(for: url, key: key), let image = UIImage(data: data) else { return nil }
-        memory.setObject(image, forKey: key as NSString)
-        return image
+        if case .loaded(let image) = await fetchImage(for: url, key: key) { return image }
+        return nil
+    }
+
+    /// Like `image(for:key:)`, but says whether a failure is worth retrying.
+    public func fetchImage(for url: URL?, key: String) async -> SpriteFetchResult<UIImage> {
+        if let hit = cachedImage(key: key) { return .loaded(hit) }
+        switch await fetchData(for: url, key: key) {
+        case .loaded(let data):
+            // Undecodable bytes won't decode on a retry either.
+            guard let image = UIImage(data: data) else { return .notFound }
+            memory.setObject(image, forKey: key as NSString)
+            return .loaded(image)
+        case .notFound: return .notFound
+        case .failed: return .failed
+        }
     }
 
     /// Raw bytes (e.g. an animated GIF) from disk, else fetched and written to disk. nil on failure.
     public func data(for url: URL?, key: String) async -> Data? {
+        if case .loaded(let data) = await fetchData(for: url, key: key) { return data }
+        return nil
+    }
+
+    /// Like `data(for:key:)`, but says whether a failure is worth retrying.
+    public func fetchData(for url: URL?, key: String) async -> SpriteFetchResult<Data> {
         if let file = directory?.appendingPathComponent(key), let data = try? Data(contentsOf: file) {
-            return data
+            return .loaded(data)
         }
-        guard let url,
-              let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+        guard let url else { return .notFound }
+        guard let (data, response) = try? await session.data(from: url) else { return .failed }
+        let status = (response as? HTTPURLResponse)?.statusCode
+        guard status == 200, !data.isEmpty else {
+            // 404/410: the sprite doesn't exist. Rate limits, 5xx and empty bodies can recover.
+            return status == 404 || status == 410 ? .notFound : .failed
+        }
         if let file = directory?.appendingPathComponent(key) {
             try? data.write(to: file, options: .atomic)
         }
-        return data
+        return .loaded(data)
     }
 
     /// Warm the disk layer for what the widget will need (current + representative sprite).
-    public func prefetchSpecies(_ pairs: [(id: Int, shiny: Bool)]) async {
-        for pair in pairs {
-            _ = await image(for: PokeSpriteURL.species(id: pair.id, shiny: pair.shiny),
-                            key: PokeSpriteURL.speciesKey(id: pair.id, shiny: pair.shiny))
+    public func prefetchSpecies(_ sprites: [(id: Int, shiny: Bool, form: PhoneSpriteForm?)]) async {
+        for sprite in sprites {
+            _ = await image(for: PokeSpriteURL.species(id: sprite.id, shiny: sprite.shiny, form: sprite.form),
+                            key: PokeSpriteURL.speciesKey(id: sprite.id, shiny: sprite.shiny, form: sprite.form))
         }
     }
 

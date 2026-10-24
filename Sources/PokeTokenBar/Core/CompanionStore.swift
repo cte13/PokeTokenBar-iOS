@@ -303,7 +303,9 @@ final class CompanionStore {
             }
             switch item.content {
             case .species(let id):
-                return PhoneEvoNode(speciesID: id, name: currentLine?.localizedName(id, language), state: state)
+                return PhoneEvoNode(speciesID: id, name: currentLine?.localizedName(id, language), state: state,
+                                    form: PokemonForm.phoneSprite(speciesID: id, form: self.state.active?.form,
+                                                                  language: language))
             case .mystery:
                 return PhoneEvoNode(speciesID: nil, name: nil, state: state)
             }

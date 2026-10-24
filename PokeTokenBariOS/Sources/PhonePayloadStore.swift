@@ -194,16 +194,15 @@ final class PhonePayloadStore {
     /// Warm the shared sprite cache for companion, dex, and shop/bag item sprites
     /// so the widget and offline tabs can render right away.
     private func prefetchAssets(for payload: PhonePayload) {
-        var pairs: [(id: Int, shiny: Bool)] = []
+        var pairs: [(id: Int, shiny: Bool, form: PhoneSpriteForm?)] = []
         if let companion = payload.companion {
-            if let id = companion.speciesID { pairs.append((id, companion.isShiny)) }
-            if let rep = companion.representativeSpeciesID {
-                pairs.append((rep, companion.representativeIsShiny ?? false))
-            }
+            if let id = companion.speciesID { pairs.append((id, companion.isShiny, companion.form)) }
+            // The widget can't reach the network reliably, so its sprite must be on disk first.
+            if let widget = companion.widgetSprite { pairs.append(widget) }
         }
         // Prefetch collection species so dex works offline
         for sp in payload.dex {
-            pairs.append((sp.id, sp.isShiny))
+            pairs.append((sp.id, sp.isShiny, nil))
         }
 
         var itemNames: Set<String> = []

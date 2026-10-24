@@ -222,16 +222,19 @@ private struct DexSpeciesCell: View {
 
     private static let thumb: CGFloat = 54
 
+    /// Same as the Mac's Pokédex: species with forms show "collected/total".
     private var displayName: String {
-        if species.id == 201, let count = species.unownFormCount, count > 0 {
-            return "\(species.name) \(count)/28"
-        }
-        return species.name
+        let forms = species.displayForms
+        guard !forms.isEmpty else { return species.name }
+        return "\(species.name) \(forms.filter(\.isOwned).count)/\(forms.count)"
     }
 
     var body: some View {
         VStack(spacing: 2) {
-            SpeciesSprite(speciesID: species.id, shiny: species.isShiny, size: Self.thumb)
+            // Like the Mac, a species with forms keeps its default, non-shiny icon; the detail
+            // picker shows each form's colors.
+            SpeciesSprite(speciesID: species.id,
+                          shiny: species.displayForms.isEmpty && species.isShiny, size: Self.thumb)
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 2) {
                         Text("#\(species.id)")
@@ -341,7 +344,9 @@ private struct CatchLogRow: View {
                 chainOrder: entry.chainOrder,
                 chainNames: entry.chainNames,
                 isShiny: entry.isShiny,
-                unownForm: entry.unownForm
+                forms: Dictionary(uniqueKeysWithValues: entry.chainOrder.compactMap { id in
+                    entry.form(at: id).map { (id, $0) }
+                })
             )
 
             HStack {
@@ -368,7 +373,8 @@ private struct CatchLogEvolutionLine: View {
     let chainOrder: [Int]
     let chainNames: [Int: String]
     let isShiny: Bool
-    let unownForm: String?
+    /// The individual's form at each species that has forms.
+    let forms: [Int: PhoneSpriteForm]
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -388,8 +394,7 @@ private struct CatchLogEvolutionLine: View {
                         .foregroundStyle(.tertiary)
                 }
                 VStack(spacing: 2) {
-                    SpeciesSprite(speciesID: id, shiny: isShiny, size: 42,
-                                 unownForm: (id == 201) ? unownForm : nil)
+                    SpeciesSprite(speciesID: id, shiny: isShiny, size: 42, form: forms[id])
                     Text(chainNames[id] ?? "#\(id)")
                         .font(.system(size: 8))
                         .foregroundStyle(.secondary)
@@ -409,7 +414,8 @@ struct PokemonDetailView: View {
     private let initialSpecies: PhoneDexSpecies?
     private let entry: PhoneDexEntry?
 
-    @State private var selectedUnownForm: String?
+    /// Selected form identifier, for species with forms.
+    @State private var selectedForm: String?
     @State private var selectedIndividualID: String = ""
 
     init(species: PhoneDexSpecies) {
@@ -435,8 +441,27 @@ struct PokemonDetailView: View {
         return store.payload?.dex.first { $0.id == speciesID }
     }
 
-    private var speciesName: String {
+    private var forms: [PhoneDexForm] { currentSpecies?.displayForms ?? [] }
+
+    /// The form shown in the header: the picker's selection, else the opened catch's form.
+    private var displayedForm: PhoneSpriteForm? {
+        if let selectedForm, let match = forms.first(where: { $0.id == selectedForm }) { return match.sprite }
+        return entry?.form(at: speciesID) ?? forms.first?.sprite
+    }
+
+    /// The form to select first: the opened catch's, else the representative, else the first owned.
+    private var initialForm: String? {
+        if let form = entry?.form(at: speciesID) { return form.form }
+        let owned = forms.filter(\.isOwned)
+        return (owned.first(where: \.isRepresentative) ?? owned.first ?? forms.first)?.id
+    }
+
+    private var baseSpeciesName: String {
         currentSpecies?.name ?? entry?.chainNames[speciesID] ?? "#\(speciesID)"
+    }
+
+    private var speciesName: String {
+        displayedForm?.displayName(baseSpeciesName, speciesID: speciesID) ?? baseSpeciesName
     }
 
     private var rarity: String {
@@ -448,14 +473,21 @@ struct PokemonDetailView: View {
     }
 
     private var isRepresentative: Bool {
+        if let displayedForm {
+            return forms.first { $0.id == displayedForm.form }?.isRepresentative ?? false
+        }
         if currentSpecies?.isRepresentative == true { return true }
         return store.payload?.companion?.representativeSpeciesID == speciesID
     }
 
+    /// For species with forms, only individuals of the displayed form (as on the Mac).
     private var matchingIndividuals: [PhoneDexEntry] {
         guard let payload = store.payload else { return entry.map { [$0] } ?? [] }
+        let defaultForm = forms.first?.id
         return payload.catchLog.filter { log in
-            log.finalID == speciesID && log.profile != nil
+            guard log.finalID == speciesID, log.profile != nil else { return false }
+            guard let shown = displayedForm?.form else { return true }
+            return (log.form(at: speciesID)?.form ?? defaultForm) == shown
         }
     }
 
@@ -464,18 +496,27 @@ struct PokemonDetailView: View {
            let found = matchingIndividuals.first(where: { $0.id == selectedIndividualID }) {
             return found
         }
-        return entry ?? matchingIndividuals.first
+        // The opened catch, while its form is the one displayed.
+        if let entry {
+            let entryForm = entry.form(at: speciesID)?.form ?? forms.first?.id
+            if displayedForm == nil || entryForm == displayedForm?.form { return entry }
+        }
+        return matchingIndividuals.first
     }
 
     private var isShiny: Bool {
-        currentIndividual?.isShiny ?? currentSpecies?.isShiny ?? false
+        if let currentIndividual { return currentIndividual.isShiny }
+        if let displayedForm, let match = forms.first(where: { $0.id == displayedForm.form }) {
+            return match.isShiny
+        }
+        return currentSpecies?.isShiny ?? false
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if speciesID == 201 {
-                    unownFormGrid
+                if !forms.isEmpty {
+                    formGrid
                 }
 
                 identityHeader
@@ -512,8 +553,8 @@ struct PokemonDetailView: View {
         .navigationTitle("#\(speciesID)")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if selectedUnownForm == nil {
-                selectedUnownForm = entry?.unownForm ?? currentSpecies?.unownForms?.first?.form
+            if selectedForm == nil {
+                selectedForm = initialForm
             }
             if selectedIndividualID.isEmpty {
                 selectedIndividualID = currentIndividual?.id ?? ""
@@ -529,7 +570,7 @@ struct PokemonDetailView: View {
                 speciesID: speciesID,
                 shiny: isShiny,
                 size: 80,
-                unownForm: selectedUnownForm
+                form: displayedForm
             )
             .frame(width: 80, height: 80)
 
@@ -540,6 +581,14 @@ struct PokemonDetailView: View {
                 Text(RarityStyle.label(rarity))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+
+                // Stats and moves come from the species' default form (same note as the Mac).
+                if let displayedForm, !displayedForm.isDefault, currentSpecies?.details != nil {
+                    Text("Data uses the default form")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 HStack(spacing: 4) {
                     if isShiny {
@@ -576,47 +625,49 @@ struct PokemonDetailView: View {
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // MARK: - Unown Form Grid
+    // MARK: - Form Grid
 
-    private static let allUnownForms = [
-        "a", "b", "c", "d", "e", "f", "g",
-        "h", "i", "j", "k", "l", "m", "n",
-        "o", "p", "q", "r", "s", "t", "u",
-        "v", "w", "x", "y", "z", "exclamation", "question"
-    ]
+    /// Same column rule as the Mac: Unown's 28 letters fill seven columns, named forms get wider cells.
+    static func formGridColumns(formCount: Int) -> Int {
+        formCount > 8 ? (formCount > 20 ? 7 : 6) : min(formCount, 4)
+    }
 
-    private var unownFormGrid: some View {
-        let ownedForms = currentSpecies?.unownForms ?? []
+    private var formGrid: some View {
+        let ownedCount = forms.filter(\.isOwned).count
+        let columns = Self.formGridColumns(formCount: forms.count)
         return VStack(alignment: .leading, spacing: 6) {
-            Text(String(localized: "Unown Forms (\(ownedForms.count)/28)"))
+            Text("Forms \(ownedCount)/\(forms.count)")
                 .font(.caption.weight(.semibold))
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
-                ForEach(Self.allUnownForms, id: \.self) { formName in
-                    let owned = ownedForms.first { $0.form == formName }
-                    let symbol = formName == "exclamation" ? "!" : (formName == "question" ? "?" : formName.uppercased())
-                    let isSelected = (selectedUnownForm ?? "a") == formName
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: columns), spacing: 4) {
+                ForEach(forms) { form in
+                    let label = form.sprite.label ?? form.sprite.form
+                    let isSelected = displayedForm?.form == form.id
 
                     Button {
-                        if owned != nil {
-                            selectedUnownForm = formName
-                        }
+                        selectedForm = form.id
+                        selectedIndividualID = ""
                     } label: {
                         VStack(spacing: 1) {
-                            SpeciesSprite(speciesID: 201, shiny: owned?.isShiny == true, size: 28, unownForm: formName)
+                            SpeciesSprite(speciesID: speciesID, shiny: form.isShiny, size: 28, form: form.sprite)
                                 .frame(width: 28, height: 28)
                                 .overlay(alignment: .topTrailing) {
-                                    if owned?.isShiny == true {
+                                    if form.isShiny {
                                         Text("✨").font(.system(size: 6))
                                     }
                                 }
-                            Text(symbol)
+                            // Wide grids hold short labels (letters, types); longer names wrap on two lines.
+                            Text(label)
                                 .font(.system(size: 9, weight: .semibold))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(columns > 4 ? 1 : 2, reservesSpace: columns <= 4)
+                                .minimumScaleFactor(0.6)
+                                .padding(.horizontal, 2)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 3)
-                        .opacity(owned == nil ? 0.25 : 1)
-                        .background(owned?.isRepresentative == true
+                        .opacity(form.isOwned ? 1 : 0.25)
+                        .background(form.isRepresentative
                                     ? Color.accentColor.opacity(0.16)
                                     : Color.secondary.opacity(0.06),
                                     in: RoundedRectangle(cornerRadius: 6))
@@ -628,7 +679,10 @@ struct PokemonDetailView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(owned == nil)
+                    .disabled(!form.isOwned)
+                    .accessibilityLabel(form.sprite.displayName(baseSpeciesName, speciesID: speciesID))
+                    .accessibilityValue(form.isOwned ? "" : String(localized: "Not collected"))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
         }

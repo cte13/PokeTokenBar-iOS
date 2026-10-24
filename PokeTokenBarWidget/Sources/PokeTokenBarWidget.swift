@@ -245,8 +245,9 @@ struct PokeTokenBarWidgetEntryView: View {
                 if companion.isEgg {
                     Text("🥚")
                         .font(.system(size: 14))
-                } else if let id = companion.representativeSpeciesID ?? companion.speciesID,
-                          let img = SpriteCache.shared.cachedImage(key: PokeSpriteURL.speciesKey(id: id, shiny: companion.isShiny)) {
+                } else if let sprite = companion.widgetSprite,
+                          let img = SpriteCache.shared.cachedImage(
+                              key: PokeSpriteURL.speciesKey(id: sprite.id, shiny: sprite.shiny, form: sprite.form)) {
                     Image(uiImage: img)
                         .resizable()
                         .interpolation(.none)
@@ -529,19 +530,18 @@ struct PokeTokenBarWidgetEntryView: View {
     /// Mirrors the Mac menu bar: the pinned representative species when set, else the current mon.
     @ViewBuilder
     private func spriteImage(companion: PhoneCompanionState, eggFontSize: CGFloat = 40) -> some View {
-        let id = companion.representativeSpeciesID ?? companion.speciesID
-        let shiny = companion.representativeSpeciesID != nil
-            ? (companion.representativeIsShiny ?? false) : companion.isShiny
-        if let id, let img = SpriteCache.shared.cachedImage(key: PokeSpriteURL.speciesKey(id: id, shiny: shiny)) {
+        let sprite = companion.widgetSprite
+        if let sprite, let img = SpriteCache.shared.cachedImage(
+            key: PokeSpriteURL.speciesKey(id: sprite.id, shiny: sprite.shiny, form: sprite.form)) {
             Image(uiImage: img)
                 .resizable()
                 .interpolation(.none)
         } else if companion.isEgg {
             Text("🥚").font(.system(size: eggFontSize))
-        } else if let id {
+        } else if let sprite {
             // Not cached yet (app hasn't run since this mon appeared) — the widget may not get
             // network, so fall back to the Mac-side name over a placeholder rather than spinning.
-            AsyncImage(url: PokeSpriteURL.species(id: id, shiny: shiny)) { image in
+            AsyncImage(url: PokeSpriteURL.species(id: sprite.id, shiny: sprite.shiny, form: sprite.form)) { image in
                 image.resizable().interpolation(.none)
             } placeholder: {
                 Image(systemName: "questionmark.circle").font(.title).foregroundStyle(.tertiary)

@@ -1948,28 +1948,6 @@
         }
       }
     },
-    "Unown Forms (%lld/28)": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "안농 글자 (%lld/28)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "アンノーン (%lld/28文字)"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Formas Unown (%lld/28)"
-          }
-        }
-      }
-    },
     "Individual": {
       "localizations": {
         "ko": {
@@ -2340,6 +2318,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Los detalles del Pokémon se sincronizan desde tu Mac."
+          }
+        }
+      }
+    },
+    "Forms %lld/%lld": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "폼 %1$lld/%2$lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルム %1$lld/%2$lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Formas %1$lld/%2$lld"
+          }
+        }
+      }
+    },
+    "Data uses the default form": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "정보는 기본 폼 기준"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "データは基本フォルムに基づきます"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datos de la forma predeterminada"
+          }
+        }
+      }
+    },
+    "Not collected": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "미수집"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未収集"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin conseguir"
           }
         }
       }

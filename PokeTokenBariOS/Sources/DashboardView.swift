@@ -190,7 +190,7 @@ struct CompanionCard: View {
                     .foregroundStyle(.secondary)
             } else {
                 if let id = companion.speciesID {
-                    AnimatedSpeciesSprite(speciesID: id, shiny: companion.isShiny, size: 96)
+                    AnimatedSpeciesSprite(speciesID: id, shiny: companion.isShiny, size: 96, form: companion.form)
                 }
 
                 HStack {
@@ -298,7 +298,7 @@ struct EvolutionLineStrip: View {
                 VStack(spacing: 2) {
                     Group {
                         if let id = node.speciesID {
-                            SpeciesSprite(speciesID: id, shiny: false, size: 40)
+                            SpeciesSprite(speciesID: id, shiny: false, size: 40, form: node.form)
                                 .saturation(node.state == .future ? 0 : 1)
                                 .opacity(node.state == .future ? 0.45 : 1)
                         } else {

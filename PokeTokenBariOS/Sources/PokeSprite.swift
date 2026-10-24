@@ -30,7 +30,10 @@ struct CachedSprite<Placeholder: View>: View {
         // Always resolve the current key: SwiftUI keeps this view's @State across a key change
         // (e.g. the companion evolving), so an `if image == nil` guard would keep the old sprite.
         .task(id: key) {
-            image = await SpriteCache.shared.image(for: url, key: key)
+            // Keep the placeholder while a temporary failure recovers; a cancelled task (key change,
+            // view gone) stops retrying and must not clear a newer key's image.
+            let loaded = await SpriteRetry.load { await SpriteCache.shared.fetchImage(for: url, key: key) }
+            if !Task.isCancelled { image = loaded }
         }
     }
 }
@@ -40,11 +43,11 @@ struct SpeciesSprite: View {
     let speciesID: Int
     let shiny: Bool
     let size: CGFloat
-    var unownForm: String? = nil
+    var form: PhoneSpriteForm? = nil
 
     var body: some View {
-        CachedSprite(url: PokeSpriteURL.species(id: speciesID, shiny: shiny, unownForm: unownForm),
-                     key: PokeSpriteURL.speciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)) {
+        CachedSprite(url: PokeSpriteURL.species(id: speciesID, shiny: shiny, form: form),
+                     key: PokeSpriteURL.speciesKey(id: speciesID, shiny: shiny, form: form)) {
             ProgressView()
         }
         .frame(width: size, height: size)
@@ -78,7 +81,7 @@ struct AnimatedSpeciesSprite: View {
     let speciesID: Int
     let shiny: Bool
     let size: CGFloat
-    var unownForm: String? = nil
+    var form: PhoneSpriteForm? = nil
 
     @State private var animated: UIImage?
 
@@ -87,17 +90,25 @@ struct AnimatedSpeciesSprite: View {
             if let animated {
                 AnimatedImageView(image: animated)
             } else {
-                SpeciesSprite(speciesID: speciesID, shiny: shiny, size: size, unownForm: unownForm)
+                SpeciesSprite(speciesID: speciesID, shiny: shiny, size: size, form: form)
             }
         }
         .frame(width: size, height: size)
-        .task(id: PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)) {
+        .task(id: PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, form: form)) {
             animated = nil
             guard PokeSpriteURL.hasAnimatedSprite(id: speciesID) else { return }
-            let key = PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)
-            guard let data = await SpriteCache.shared.data(
-                for: PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, unownForm: unownForm), key: key) else { return }
-            animated = GIFDecoder.animatedImage(from: data)
+            let key = PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, form: form)
+            let url = PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, form: form)
+            // The static sprite shows while a temporary GIF failure recovers (upstream #447).
+            let frames = await SpriteRetry.load { () -> SpriteFetchResult<UIImage> in
+                switch await SpriteCache.shared.fetchData(for: url, key: key) {
+                case .loaded(let data):
+                    return GIFDecoder.animatedImage(from: data).map { .loaded($0) } ?? .notFound
+                case .notFound: return .notFound
+                case .failed: return .failed
+                }
+            }
+            if !Task.isCancelled { animated = frames }
         }
     }
 }

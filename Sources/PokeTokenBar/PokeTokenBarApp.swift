@@ -323,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: - Phone Payload Server
 
     private func buildAndPublishPayload() async {
+        await companion.loadPhoneFormNames()
         let limits = Self.phoneLimitStatus(
             limits: store.limits, codex: store.codexLimits,
             opencodeGo: store.opencodeGoLimits, antigravity: store.antigravityLimits,
@@ -349,7 +350,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             representativeIsShiny: companion.representativeSubject.isShiny,
             statusText: companion.statusText,
             natureText: companion.currentNature?.name(companion.language),
-            lineNodes: companion.phoneLineNodes)
+            lineNodes: companion.phoneLineNodes,
+            form: companion.currentSpeciesID.flatMap {
+                PokemonForm.phoneSprite(speciesID: $0, form: companion.currentForm, language: companion.language)
+            },
+            representativeForm: companion.representativeSubject.speciesID.flatMap {
+                PokemonForm.phoneSprite(speciesID: $0, form: companion.representativeSubject.form,
+                                        language: companion.language)
+            })
         let todayKey = Self.todayDateKey()
         let providers = Self.phoneProviderSnapshots(store.snapshots, todayKey: todayKey)
         // 가방·도감(폰 읽기 전용) — 표시 문자열은 폰에 현지화 인프라가 없어 여기서 미리 만든다
@@ -368,7 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         let dex = companion.dexSpecies.map { sp in
             let isRep = companion.isRepresentative(sp)
-            // The phone payload still models Unown letters only; other species' forms aren't sent yet.
+            // `forms` covers every species with forms. The Unown fields stay for older iPhone builds.
             let unown = PokemonForm.unownSpeciesID
             let unownCount: Int? = (sp.id == unown) ? companion.state.collectedForms(speciesID: unown).count : nil
             let unownForms: [PhoneUnownForm]? = (sp.id == unown) ? companion.formSpecies(speciesID: unown).compactMap { formSp in
@@ -380,7 +388,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return PhoneDexSpecies(id: sp.id, name: sp.name, rarity: sp.rarity.rawValue,
                                    isShiny: sp.isShiny, isRaising: sp.isRaising,
                                    isRepresentative: isRep, unownFormCount: unownCount,
-                                   unownForms: unownForms, details: details)
+                                   unownForms: unownForms, details: details,
+                                   forms: companion.phoneDexForms(speciesID: sp.id))
         }
         let catchLog = companion.dexEntriesSorted.map { entry in
             Self.phoneDexEntry(entry, companion: companion)
@@ -702,7 +711,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             chainOrder: entry.chainOrder,
             chainNames: names,
             unownForm: entry.chainOrder.contains(PokemonForm.unownSpeciesID) ? entry.form?.rawValue : nil,
-            profile: profile
+            profile: profile,
+            chainForms: companion.phoneChainForms(entry)
         )
     }
 

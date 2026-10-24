@@ -4,34 +4,23 @@ import Foundation
 public enum PokeSpriteURL {
     private static let base = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites"
 
-    public static func species(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
-        let name: String
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            name = "\(id)-\(form)"
-        } else {
-            name = "\(id)"
-        }
-        return URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(name).png")
+    /// Static PNG. A form uses the Mac's resolved file name (`10006` for Sky Shaymin, `412-sandy`).
+    public static func species(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> URL? {
+        URL(string: "\(base)/pokemon/\(shiny ? "shiny/" : "")\(form?.staticAsset ?? "\(id)").png")
     }
 
     /// Gen-V animated GIF — only species 1…649 have one (same rule as the Mac's PokemonAssets).
     public static func hasAnimatedSprite(id: Int) -> Bool { (1...649).contains(id) }
 
-    public static func animatedSpecies(id: Int, shiny: Bool, unownForm: String? = nil) -> URL? {
+    public static func animatedSpecies(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> URL? {
         guard hasAnimatedSprite(id: id) else { return nil }
-        let name: String
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            name = "\(id)-\(form)"
-        } else {
-            name = "\(id)"
-        }
+        let name = form?.animatedAsset ?? "\(id)"
         return URL(string: "\(base)/pokemon/versions/generation-v/black-white/animated/\(shiny ? "shiny/" : "")\(name).gif")
     }
 
-    public static func animatedSpeciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            return "\(id)_\(form)_\(shiny)_anim.gif"
-        }
+    /// Default forms keep the plain keys, so sprites cached before forms existed stay valid.
+    public static func animatedSpeciesKey(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> String {
+        if let form, !form.isDefault { return "\(id)_\(form.form)_\(shiny)_anim.gif" }
         return "\(id)_\(shiny)_anim.gif"
     }
 
@@ -40,10 +29,8 @@ public enum PokeSpriteURL {
     }
 
     /// Stable on-disk file name for a species sprite — the same key the widget has always used.
-    public static func speciesKey(id: Int, shiny: Bool, unownForm: String? = nil) -> String {
-        if id == 201, let form = unownForm, !form.isEmpty, form != "a" {
-            return "\(id)_\(form)_\(shiny).png"
-        }
+    public static func speciesKey(id: Int, shiny: Bool, form: PhoneSpriteForm? = nil) -> String {
+        if let form, !form.isDefault { return "\(id)_\(form.form)_\(shiny).png" }
         return "\(id)_\(shiny).png"
     }
     public static func itemKey(name: String) -> String { "item_\(name).png" }
@@ -107,10 +94,10 @@ public final class SpriteCache: @unchecked Sendable {
     }
 
     /// Warm the disk layer for what the widget will need (current + representative sprite).
-    public func prefetchSpecies(_ pairs: [(id: Int, shiny: Bool)]) async {
-        for pair in pairs {
-            _ = await image(for: PokeSpriteURL.species(id: pair.id, shiny: pair.shiny),
-                            key: PokeSpriteURL.speciesKey(id: pair.id, shiny: pair.shiny))
+    public func prefetchSpecies(_ sprites: [(id: Int, shiny: Bool, form: PhoneSpriteForm?)]) async {
+        for sprite in sprites {
+            _ = await image(for: PokeSpriteURL.species(id: sprite.id, shiny: sprite.shiny, form: sprite.form),
+                            key: PokeSpriteURL.speciesKey(id: sprite.id, shiny: sprite.shiny, form: sprite.form))
         }
     }
 

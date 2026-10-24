@@ -40,11 +40,11 @@ struct SpeciesSprite: View {
     let speciesID: Int
     let shiny: Bool
     let size: CGFloat
-    var unownForm: String? = nil
+    var form: PhoneSpriteForm? = nil
 
     var body: some View {
-        CachedSprite(url: PokeSpriteURL.species(id: speciesID, shiny: shiny, unownForm: unownForm),
-                     key: PokeSpriteURL.speciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)) {
+        CachedSprite(url: PokeSpriteURL.species(id: speciesID, shiny: shiny, form: form),
+                     key: PokeSpriteURL.speciesKey(id: speciesID, shiny: shiny, form: form)) {
             ProgressView()
         }
         .frame(width: size, height: size)
@@ -78,7 +78,7 @@ struct AnimatedSpeciesSprite: View {
     let speciesID: Int
     let shiny: Bool
     let size: CGFloat
-    var unownForm: String? = nil
+    var form: PhoneSpriteForm? = nil
 
     @State private var animated: UIImage?
 
@@ -87,16 +87,16 @@ struct AnimatedSpeciesSprite: View {
             if let animated {
                 AnimatedImageView(image: animated)
             } else {
-                SpeciesSprite(speciesID: speciesID, shiny: shiny, size: size, unownForm: unownForm)
+                SpeciesSprite(speciesID: speciesID, shiny: shiny, size: size, form: form)
             }
         }
         .frame(width: size, height: size)
-        .task(id: PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)) {
+        .task(id: PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, form: form)) {
             animated = nil
             guard PokeSpriteURL.hasAnimatedSprite(id: speciesID) else { return }
-            let key = PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, unownForm: unownForm)
+            let key = PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, form: form)
             guard let data = await SpriteCache.shared.data(
-                for: PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, unownForm: unownForm), key: key) else { return }
+                for: PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, form: form), key: key) else { return }
             animated = GIFDecoder.animatedImage(from: data)
         }
     }

@@ -38,7 +38,7 @@ public enum PokeSpriteURL {
 
 /// Outcome of one sprite fetch. Only a temporary failure is worth retrying: a 404 means the
 /// sprite doesn't exist (e.g. no animated GIF for that form) and retrying it would never succeed.
-public enum SpriteFetchResult<Value> {
+public enum SpriteFetchResult<Value: Sendable>: Sendable {
     case loaded(Value)
     case notFound
     case failed
@@ -52,7 +52,7 @@ public enum SpriteRetry {
     public static let maximumDelay = Duration.seconds(30)
 
     /// Runs on the caller's actor (`isolation`), so a SwiftUI view task can pass its closure.
-    public static func load<Value>(
+    public static func load<Value: Sendable>(
         isolation: isolated (any Actor)? = #isolation,
         waitBeforeRetry: (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         _ attempt: () async -> SpriteFetchResult<Value>

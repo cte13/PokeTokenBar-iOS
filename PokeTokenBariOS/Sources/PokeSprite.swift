@@ -30,7 +30,10 @@ struct CachedSprite<Placeholder: View>: View {
         // Always resolve the current key: SwiftUI keeps this view's @State across a key change
         // (e.g. the companion evolving), so an `if image == nil` guard would keep the old sprite.
         .task(id: key) {
-            image = await SpriteCache.shared.image(for: url, key: key)
+            // Keep the placeholder while a temporary failure recovers; a cancelled task (key change,
+            // view gone) stops retrying and must not clear a newer key's image.
+            let loaded = await SpriteRetry.load { await SpriteCache.shared.fetchImage(for: url, key: key) }
+            if !Task.isCancelled { image = loaded }
         }
     }
 }
@@ -95,9 +98,17 @@ struct AnimatedSpeciesSprite: View {
             animated = nil
             guard PokeSpriteURL.hasAnimatedSprite(id: speciesID) else { return }
             let key = PokeSpriteURL.animatedSpeciesKey(id: speciesID, shiny: shiny, form: form)
-            guard let data = await SpriteCache.shared.data(
-                for: PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, form: form), key: key) else { return }
-            animated = GIFDecoder.animatedImage(from: data)
+            let url = PokeSpriteURL.animatedSpecies(id: speciesID, shiny: shiny, form: form)
+            // The static sprite shows while a temporary GIF failure recovers (upstream #447).
+            let frames = await SpriteRetry.load { () -> SpriteFetchResult<UIImage> in
+                switch await SpriteCache.shared.fetchData(for: url, key: key) {
+                case .loaded(let data):
+                    return GIFDecoder.animatedImage(from: data).map { .loaded($0) } ?? .notFound
+                case .notFound: return .notFound
+                case .failed: return .failed
+                }
+            }
+            if !Task.isCancelled { animated = frames }
         }
     }
 }

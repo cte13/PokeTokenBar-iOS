@@ -4,17 +4,16 @@ import SwiftUI
 /// 앱 메뉴의 "Settings…"(⌘,) 항목을 찾는다.
 ///
 /// **왜 필요한가.** 이 앱의 설정 화면은 팝오버 안에만 있다(`PopoverView` 가 `SettingsView` 를 렌더).
-/// 그런데 SwiftUI `App` 은 최소 하나의 `Scene` 을 요구해서 `Settings { EmptyView() }` 를 두고 있고,
-/// macOS 는 그 씬에 ⌘, 를 고정 연결한다 — 눌러도 **빈 창** 이 뜬다. 씬을 없앨 수는 없으므로
-/// (다른 최소 씬은 실제 창을 띄워 더 나쁘다), 메뉴 항목의 target/action 을 우리 것으로 바꿔
-/// 빈 창이 애초에 만들어지지 않게 한다.
+/// 예전엔 SwiftUI `Settings { … }` 씬이 ⌘, 를 가져가 **빈 창** 을 띄웠다. 이제 앱은 `_EmptyScene()`
+/// 만 두고(#448) 창을 하나도 등록하지 않으므로, ⌘, 는 `install` 이 앱 메뉴에 넣는 우리 항목이 맡는다.
+/// 시스템이 항목을 이미 만들어 둔 경우를 위해 찾기·리타깃 경로도 유지한다.
 ///
 /// **왜 셀렉터로 찾나.** 제목("Settings…")은 시스템 로케일을 따라 번역된다 — 한국어 시스템에서는
 /// "설정…" 이라 제목 매칭은 그 기기에서 조용히 실패한다. 셀렉터는 로케일과 무관하다.
 enum SettingsMenuItem {
     /// macOS 13+ 는 `showSettingsWindow:`, 그 이전은 `showPreferencesWindow:`.
     /// 문서화된 API 가 아니라 관측된 이름이라, 못 찾는 경우가 정상 경로로 존재한다 —
-    /// 그래서 호출부는 실패를 조용히 넘기지 않고 폴백(`SettingsSceneBridge`)을 함께 둔다.
+    /// 그때 `install` 은 항목을 새로 만든다.
     static let actions: [Selector] = [
         Selector(("showSettingsWindow:")),
         Selector(("showPreferencesWindow:")),
@@ -59,23 +58,18 @@ enum SettingsMenuItem {
         item.action = action
         return true
     }
-}
 
-/// `Settings` 씬의 폴백 내용 — 메뉴 항목 리타깃이 실패했을 때만 도달한다.
-///
-/// 아무것도 그리지 않고, 자기 창을 닫은 뒤 팝오버의 설정 화면을 연다. 창이 잠깐 보일 수는 있지만
-/// **빈 창이 남는 것보다는 낫다** — 원래 결함이 정확히 "아무것도 없는 창이 떠 있다" 였다.
-@MainActor
-struct SettingsSceneBridge: View {
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                // onAppear 시점엔 아직 창이 키가 아닐 수 있어 다음 런루프에서 처리한다.
-                DispatchQueue.main.async {
-                    NSApp.keyWindow?.close()
-                    (NSApp.delegate as? AppDelegate)?.openSettingsFromMenu(nil)
-                }
-            }
+    /// ⌘, 를 우리 액션에 연결한다: 기존 설정 항목이 있으면 돌리고, 없으면 앱 메뉴(첫 번째 최상위
+    /// 항목의 서브메뉴)의 첫 구분선 뒤 — "About" 다음 — 에 새로 넣는다. 앱 메뉴가 아직 없으면 false.
+    @discardableResult
+    static func install(in menu: NSMenu, to target: AnyObject, action: Selector, title: String) -> Bool {
+        if retarget(in: menu, to: target, action: action) { return true }
+        guard let appMenu = menu.items.first?.submenu else { return false }
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: ",")
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        let index = appMenu.items.firstIndex(where: \.isSeparatorItem).map { $0 + 1 } ?? appMenu.items.count
+        appMenu.insertItem(item, at: index)
+        return true
     }
 }
